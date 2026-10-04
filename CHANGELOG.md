@@ -217,5 +217,8 @@
 ### Features
 - publish verified StockPilot v18 foundation
 
+### Fixes
+- CI failures - strict mode selector, system endpoint error handling, mypy Windows constants
+
 ### Maintenance
 - update changelog
