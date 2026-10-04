@@ -2,7 +2,7 @@ import { expect, type Page } from "@playwright/test";
 
 const ORIGIN = "http://localhost:3000";
 
-async function getSystemWithRetry(page: Page, maxRetries = 3): Promise<any> {
+async function getSystemWithRetry(page: Page, maxRetries = 5): Promise<any> {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     const system = await page.request.get("/api/v1/system");
     if (system.ok()) {
@@ -13,9 +13,12 @@ async function getSystemWithRetry(page: Page, maxRetries = 3): Promise<any> {
       await page.waitForTimeout(Math.min(retryAfter * 1000, 5000));
       continue;
     }
-    throw new Error(`/api/v1/system failed with ${system.status()}: ${await system.text()}`);
+    // Return failed response instead of throwing - let caller decide
+    return system;
   }
-  throw new Error("Max retries exceeded for /api/v1/system");
+  // Last attempt
+  const system = await page.request.get("/api/v1/system");
+  return system;
 }
 
 export async function registerAcknowledgedUser(page: Page, prefix: string, name: string): Promise<string> {
@@ -26,6 +29,10 @@ export async function registerAcknowledgedUser(page: Page, prefix: string, name:
   expect(registration.ok()).toBeTruthy();
 
   const system = await getSystemWithRetry(page);
+  if (!system.ok()) {
+    const body = await system.text();
+    throw new Error(`/api/v1/system failed with ${system.status()}: ${body}`);
+  }
   const version = (await system.json()).research_acknowledgment.version;
   const acknowledgment = await page.request.post("/api/v1/auth/research-acknowledgment", {
     data: { version, accepted: true },
