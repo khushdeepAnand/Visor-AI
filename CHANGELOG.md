@@ -218,6 +218,7 @@
 - publish verified StockPilot v18 foundation
 
 ### Fixes
+- E2E rate limit - increase max retries to 8 for /api/v1/system in CI
 - E2E rate limit retry - return failed response after max retries, increase max retries to 5
 - E2E test robustness - screener wait for mutation, URL redirect expectations, gitleaks config, rate limit retry
 - flaky E2E tests - robust research/screener assertions
