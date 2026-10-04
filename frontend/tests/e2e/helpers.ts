@@ -2,23 +2,22 @@ import { expect, type Page } from "@playwright/test";
 
 const ORIGIN = "http://localhost:3000";
 
-async function getSystemWithRetry(page: Page, maxRetries = 8): Promise<any> {
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
+async function getSystemWithRetry(page: Page): Promise<any> {
+  // Retry indefinitely on 429, with exponential backoff cap
+  for (let attempt = 0; ; attempt++) {
     const system = await page.request.get("/api/v1/system");
     if (system.ok()) {
       return system;
     }
     if (system.status() === 429) {
       const retryAfter = parseInt(system.headers()["retry-after"] || "1", 10);
-      await page.waitForTimeout(Math.min(retryAfter * 1000, 5000));
+      const delay = Math.min(retryAfter * 1000, 10000);
+      await page.waitForTimeout(delay);
       continue;
     }
     // Non-429 error, return immediately
     return system;
   }
-  // All retries exhausted - return last attempt (may be 429)
-  const system = await page.request.get("/api/v1/system");
-  return system;
 }
 
 export async function registerAcknowledgedUser(page: Page, prefix: string, name: string): Promise<string> {
