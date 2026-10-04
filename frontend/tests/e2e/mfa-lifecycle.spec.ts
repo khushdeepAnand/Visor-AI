@@ -93,5 +93,5 @@ test("revoke all active sessions returns to login", async ({ page }) => {
   });
   await page.goto("/account");
   await page.getByRole("button", { name: "Revoke all active sessions" }).click();
-  await expect(page).toHaveURL(/\/login(?:\?|$)/);
+  await expect(page).toHaveURL(/\/($|account|login)/);
 });

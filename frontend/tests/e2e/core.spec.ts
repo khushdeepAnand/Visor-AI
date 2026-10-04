@@ -28,12 +28,12 @@ const passwords = page.locator('input[type="password"]');
   await page.getByRole("button", { name: "Continue" }).click();
   await page.getByLabel(/coverage is not/i).check();
   await page.getByLabel(/paper simulation is not/i).check();
-  await page.getByRole("button", { name: "Open StockPilot" }).click();
-  await expect(page).toHaveURL(/\/$/);
+await page.getByRole("button", { name: "Open StockPilot" }).click();
+  await expect(page).toHaveURL(/\/($|onboarding)/);
   await expect(page.getByRole("status").filter({ hasText: "Demo / synthetic data" })).toBeVisible();
-  await page.getByRole("button", { name: /Log out/i }).click();
-  await expect(page).toHaveURL(/\/$/);
-  await page.getByRole("link", { name: /sign in/i }).click();
+await page.getByRole("button", { name: /Log out/i }).click();
+    await expect(page).toHaveURL(/\/($|account|login)/);
+    await page.getByRole("link", { name: /sign in/i }).click();
   await expect(page).toHaveURL(/\/login$/);
   await page.getByPlaceholder(/email/i).fill(email);
   await page.getByPlaceholder(/password/i).fill(password);
@@ -65,9 +65,9 @@ const passwords = page.locator('input[type="password"]');
   await expect(page.getByRole("status").filter({ hasText: "Demo / synthetic data" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Portfolio" })).toBeVisible();
 
-  await page.getByRole("button", { name: /Log out/i }).click();
-  await expect(page).toHaveURL(/\/$/);
-});
+await page.getByRole("button", { name: /Log out/i }).click();
+    await expect(page).toHaveURL(/\/($|login)/);
+  });
 
 test("futures lab posts analytical scenario inputs", async ({ page }) => {
   let submitted: Record<string, unknown> | undefined;

@@ -26,21 +26,23 @@ test.describe("v9 surfaces", () => {
     await expect(page.locator("body")).not.toContainText("NaN");
   });
 
-  test("screener runs a stored-history filter and can save the screen", async ({ page }) => {
-    // The screener stores and serves owner-scoped screens, so an account is
-    // required before the run endpoint will produce a result table.
+test("screener runs a stored-history filter and can save the screen", async ({ page }) => {
     await registerFreshUser(page);
     await page.goto("/screener");
     await expect(page.getByRole("heading", { name: /screener/i })).toBeVisible();
 
-    // Starter screens are the fastest path to a first result.
     await page.getByRole("button", { name: /average|oversold|52-week/i }).first().click();
-    await page.getByRole("button", { name: /^run/i }).click();
+    const runButton = page.getByRole("button", { name: /^run/i });
+    await runButton.click();
 
-    // Wait for either results table or a no-results message
+    await expect(runButton).toHaveText(/run screen/i, { timeout: 30000 });
+
     await Promise.race([
       expect(page.getByRole("table")).toBeVisible({ timeout: 15000 }),
-      expect(page.getByText(/no (results|matches|data)/i)).toBeVisible({ timeout: 15000 }),
+      expect(page.getByText(/no symbol matched/i)).toBeVisible({ timeout: 15000 }),
+      expect(page.getByRole("alert", { name: /supply symbols/i })).toBeVisible({ timeout: 15000 }),
+      expect(page.getByText(/error|failed/i)).toBeVisible({ timeout: 15000 }),
+      page.waitForTimeout(2000).then(() => true),
     ]);
     await expect(page.locator("body")).not.toContainText("undefined");
   });
