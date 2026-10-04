@@ -4,6 +4,7 @@
 .env.example
 .gitattributes
 .gitignore
+.gitleaksignore
 *.bat
 README.md
 ADMIN_OPERATIONS.md

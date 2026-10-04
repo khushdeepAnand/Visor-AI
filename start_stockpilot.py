@@ -41,7 +41,7 @@ def stop_process(p: subprocess.Popen[bytes] | None) -> None:
     if not p or p.poll() is not None:
         return
     try:
-        if os.name == "nt":
+        if os.name == "nt" and hasattr(signal, "CTRL_BREAK_EVENT"):
             p.send_signal(signal.CTRL_BREAK_EVENT)
             try:
                 p.wait(timeout=5)
@@ -82,7 +82,7 @@ def main() -> int:
     backend = frontend = None
     try:
         print("Starting StockPilot backend and frontend...")
-        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+        creationflags = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)) if os.name == "nt" else 0
         preexec = getattr(os, "setsid", None) if os.name != "nt" else None
 
         backend = subprocess.Popen(

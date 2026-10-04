@@ -37,7 +37,7 @@ test.describe("v9 surfaces", () => {
     await page.getByRole("button", { name: /average|oversold|52-week/i }).first().click();
     await page.getByRole("button", { name: /^run/i }).click();
 
-    await expect(page.getByRole("table").or(page.getByRole("status"))).toBeVisible();
+    await expect(page.getByRole("table")).toBeVisible();
     await expect(page.locator("body")).not.toContainText("undefined");
   });
 

@@ -6,7 +6,6 @@ import hashlib
 import os
 import re
 import time
-import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from html import unescape
 from typing import Any

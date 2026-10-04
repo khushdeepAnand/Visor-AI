@@ -10,7 +10,10 @@ export async function registerAcknowledgedUser(page: Page, prefix: string, name:
   expect(registration.ok()).toBeTruthy();
 
   const system = await page.request.get("/api/v1/system");
-  expect(system.ok()).toBeTruthy();
+  if (!system.ok()) {
+    const body = await system.text();
+    throw new Error(`/api/v1/system failed with ${system.status()}: ${body}`);
+  }
   const version = (await system.json()).research_acknowledgment.version;
   const acknowledgment = await page.request.post("/api/v1/auth/research-acknowledgment", {
     data: { version, accepted: true },
