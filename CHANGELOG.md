@@ -214,15 +214,5 @@
 - Live broker validation remains not verified, as always.
 ## Unreleased
 
-- Added fail-closed release promotion and scheduled CQR challenger reconciliation,
-  including inverted-quantile rejection, coverage-divergence alerts, and
-  optional per-job/provider telemetry spans. See `ROLLBACK_RUNBOOK.md`.
-# v18.0.0-rc.1 — 2026-10-04
-
-- Windows-installable SQLCipher driver, safe quoted-key handling and fail-closed key-file validation.
-- Static local-import/package-tree validation and mandatory extracted ZIP import/smoke gates.
-- Executed backend, frontend and browser suites; corrected E2E CORS and isolated test signing keys.
-- Public scorecard now reads authoritative settled ledger rows, uses saved nominal coverage, retains real zero-valued metrics and requires a real production receipt to claim promotion.
-- Missing baseline/significance evidence blocks promotion; live-decay diagnostics respect evidence limits and do not claim actions they did not execute.
-- Allowlisted SQLite/Postgres update identifiers; daily CI scans; scheduled Celery retention and safer retry/dead-letter replay; corrected scheduler artifact root.
-- Updated vulnerable PyJWT/urllib3 dependencies and release pins. Full v18 acceptance remains tracked in `V18_IMPLEMENTATION_STATUS.md`.
+### Features
+- publish verified StockPilot v18 foundation
