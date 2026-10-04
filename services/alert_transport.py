@@ -42,7 +42,7 @@ def dispatch_operational_alert(event: str, message: str, *, details: dict[str, o
 
     try:
         with requests.post(url, json=json.loads(json.dumps(payload, default=str)), headers={"User-Agent": "StockPilot/operational-alert"},
-                           timeout=float(os.getenv("STOCKPILOT_ALERT_TIMEOUT_SECONDS", "5")),
+                           timeout=float(os.getenv("STOCKPILOT_ALERT_TIMEOUT_SECONDS", "5")),  # nosec B113
                            allow_redirects=False) as response:
             status = response.status_code
         if not 200 <= status < 300:

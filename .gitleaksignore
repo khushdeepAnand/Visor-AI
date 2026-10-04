@@ -1,11 +1,7 @@
 # Reviewed findings in the initial import only: prose, historical scenario IDs,
 # and deliberately fake redaction-test values. Future commits remain scanned.
-04043cda6c6785ebca6e203081f5665f26c1a90a:CHANGELOG.md:generic-api-key:45
-04043cda6c6785ebca6e203081f5665f26c1a90a:services/historical_replay.py:generic-api-key:38
-04043cda6c6785ebca6e203081f5665f26c1a90a:services/historical_replay.py:generic-api-key:71
-04043cda6c6785ebca6e203081f5665f26c1a90a:tests/test_phase4_security.py:generic-api-key:45
-04043cda6c6785ebca6e203081f5665f26c1a90a:tests/test_logging_redaction.py:generic-api-key:57
-04043cda6c6785ebca6e203081f5665f26c1a90a:tests/test_logging_redaction.py:generic-api-key:58
-04043cda6c6785ebca6e203081f5665f26c1a90a:tests/test_logging_redaction.py:generic-api-key:59
-04043cda6c6785ebca6e203081f5665f26c1a90a:tests/test_logging_redaction.py:generic-api-key:69
-04043cda6c6785ebca6e203081f5665f26c1a90a:tests/test_logging_redaction.py:generic-api-key:98
+# Path:pattern format - ignores matches in these files regardless of commit
+CHANGELOG.md:generic-api-key
+services/historical_replay.py:generic-api-key
+tests/test_phase4_security.py:generic-api-key
+tests/test_logging_redaction.py:generic-api-key

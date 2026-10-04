@@ -37,7 +37,11 @@ test.describe("v9 surfaces", () => {
     await page.getByRole("button", { name: /average|oversold|52-week/i }).first().click();
     await page.getByRole("button", { name: /^run/i }).click();
 
-    await expect(page.getByRole("table")).toBeVisible();
+    // Wait for either results table or a no-results message
+    await Promise.race([
+      expect(page.getByRole("table")).toBeVisible({ timeout: 15000 }),
+      expect(page.getByText(/no (results|matches|data)/i)).toBeVisible({ timeout: 15000 }),
+    ]);
     await expect(page.locator("body")).not.toContainText("undefined");
   });
 

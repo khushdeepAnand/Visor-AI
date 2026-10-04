@@ -152,7 +152,7 @@ export default function BriefPage() {
           </Card>
         )}
 
-        {data && (
+        {data && data.coverage && (
           <>
             <Card>
               <CardHeader>

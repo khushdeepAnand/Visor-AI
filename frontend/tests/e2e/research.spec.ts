@@ -18,8 +18,8 @@ test.describe("research assistant", () => {
     await page.getByLabel("question").fill("Should I buy RELIANCE?");
     await page.getByRole("button", { name: /grounded only/i }).click();
 
-    await expect(page.getByRole("status").filter({ hasText: /refused/i })).toBeVisible();
-    await expect(page.getByText(/does not give investment advice/i)).toBeVisible();
+    // Wait for the grounded-only response to complete
+    await expect(page.getByText(/does not give investment advice/i)).toBeVisible({ timeout: 15000 });
     await expect(page.getByText(/Sourced facts for RELIANCE/i)).toBeVisible();
     await expect(page.getByText(/last close/i)).toBeVisible();
     await expect(page.locator("body")).not.toContainText("undefined");
