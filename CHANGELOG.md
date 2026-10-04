@@ -216,3 +216,6 @@
 
 ### Features
 - publish verified StockPilot v18 foundation
+
+### Maintenance
+- update changelog
