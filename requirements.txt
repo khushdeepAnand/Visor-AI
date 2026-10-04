@@ -1,0 +1,45 @@
+# StockPilot AI v6 backend/runtime dependencies
+# Python 3.12 is required by the Windows launchers and verified release workflow.
+pandas>=2.2,<4.0
+numpy>=2.0,<2.5
+scikit-learn>=1.5,<2.0
+joblib>=1.4,<2.0
+requests>=2.32,<3.0
+# defusedxml protects RSS/Atom parsers from entity-expansion XML attacks.
+defusedxml>=0.7.1,<1.0
+websockets>=13.0,<18.0
+protobuf>=5.28,<7.0
+httpx>=0.27,<1.0
+bcrypt>=4.2,<6.0
+PyJWT>=2.15,<3.0
+urllib3>=2.8,<3.0
+pyotp>=2.9,<3.0
+cryptography>=44.0,<51.0
+reportlab>=4.2,<5.0
+Authlib>=1.3,<2.0
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+pydantic>=2.9,<3.0
+python-dotenv>=1.0,<2.0
+APScheduler>=3.10,<4.0
+statsmodels>=0.14,<1.0
+lightgbm>=4.5,<5.0
+catboost>=1.2,<2.0
+redis>=5.2,<7.0
+# Database encryption (SQLCipher) and PostgreSQL support
+sqlcipher3>=0.6.2,<0.7
+psycopg2-binary>=2.9,<3.0
+alembic>=1.13,<2.0
+sqlalchemy>=2.0,<3.0
+# Task queue
+celery>=5.3,<6.0
+# Explicit India-only last-resort fallback; never the primary provider.
+yfinance>=0.2.50,<2.0
+
+# WebAuthn passkeys (hardware 2nd factor)
+webauthn>=2.8,<3.0
+# OpenTelemetry tracing (no-op unless STOCKPILOT_OTEL_ENABLED=true)
+opentelemetry-api>=1.25,<2.0
+opentelemetry-sdk>=1.25,<2.0
+opentelemetry-instrumentation-fastapi>=0.46b0,<1.0
+opentelemetry-exporter-otlp-proto-http>=1.25,<2.0

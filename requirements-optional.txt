@@ -1,0 +1,3 @@
+# Optional experimental deep-learning model. Not required for the main app.
+-r requirements.txt
+tensorflow>=2.18,<3.0

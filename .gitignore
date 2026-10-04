@@ -1,0 +1,71 @@
+# Private credentials
+.env
+.env.local
+.env.*.local
+frontend/.env.local
+!.env.example
+!frontend/.env.local.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / Next
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+frontend/screenshots/
+
+# Runtime state — never commit user data or fitted model artifacts
+database/*.db
+database/*.db-wal
+database/*.db-shm
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.joblib
+*.pkl
+
+# Runtime caches/logs
+local-history/
+backups/
+secrets/
+mutants/
+.mutmut-cache
+*.h5
+*.keras
+*.onnx
+*.pickle
+*.pt
+*.pth
+cache/
+artifacts/
+logs/
+*.log
+*.zip
+*.tmp
+*.temp
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp

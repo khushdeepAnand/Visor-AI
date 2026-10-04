@@ -1,0 +1,4 @@
+{
+  "comment": "Verified corporate actions (splits/bonuses/demergers) applied as backward OHLC adjustments by services/market_data/corporate_actions.py. Add entries ONLY from a named, verified source (subscription feed, corporate-action data provider, or manual review of exchange announcements). Format: {\"symbol\": \"RELIANCE\", \"event_type\": \"split\"|\"bonus\"|\"demerger\"|\"reverse_split\", \"effective_date\": \"YYYY-MM-DD\", \"ratio\": <old-shares-per-new for split, e.g. 2.0 for a 2:1 split>, \"note\": \"optional\"}. Ships empty on purpose - nothing here invents adjustments.",
+  "corporate_actions": []
+}

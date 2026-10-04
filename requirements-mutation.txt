@@ -1,0 +1,2 @@
+-r requirements-dev.txt
+mutmut>=3.3,<4.0; sys_platform != 'win32'

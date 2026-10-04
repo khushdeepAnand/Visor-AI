@@ -1,0 +1,20 @@
+name: stockpilot-staging
+
+# Run with: docker compose -f docker-compose.yml -f docker-compose.staging.yml up --build -d
+# Project-scoped volumes isolate staging from production. Required secrets are
+# supplied through the caller's environment or an untracked .env file.
+services:
+  api:
+    environment:
+      STOCKPILOT_ENV: staging
+      STOCKPILOT_CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      STOCKPILOT_COOKIE_SECURE: "false"
+      STOCKPILOT_JWT_SECRET: ${STOCKPILOT_JWT_SECRET:?supply a staging session secret}
+      STOCKPILOT_MFA_SECRET: ${STOCKPILOT_MFA_SECRET:?supply a separate staging MFA secret}
+  beat:
+    command: ["celery", "-A", "services.task_queue.celery_app", "beat", "-l", "info", "--schedule", "/state/celerybeat-schedule"]
+    volumes:
+      - beat_state:/state
+
+volumes:
+  beat_state:

@@ -1,0 +1,31 @@
+#!/bin/sh
+# Pre-commit secret gate. Fails the commit if the staged payload contains
+# populated sensitive environment assignments or recognized credential tokens.
+# Install with: python scripts/install_git_hooks.py
+if [ -z "$(git rev-parse --git-dir 2>/dev/null)" ]; then
+    echo "pre-commit: not a git repository; skipping secret scan."
+    exit 0
+fi
+
+PYTHON="${STOCKPILOT_PYTHON:-python}"
+
+set -e
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+if ! git diff --cached --name-only --diff-filter=ACMR | grep -q .; then
+    exit 0
+fi
+
+set +e
+"$PYTHON" scripts/scan_secrets.py $(git diff --cached --name-only --diff-filter=ACMR)
+
+if [ $? -ne 0 ]; then
+    echo "pre-commit: secret scan failed. No values were printed. Fix or revoke before committing."
+    exit 1
+fi
+
+# Also reject full-tree release regressions that a partial stage could hide.
+"$PYTHON" scripts/scan_secrets.py $(git ls-files --cached)
+status=$?
+exit $status

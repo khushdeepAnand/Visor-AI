@@ -1,0 +1,471 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =========================================================================
+   StockPilot "Ledger" design system (v10)
+   -------------------------------------------------------------------------
+   This file replaces the previous dark trading-terminal look wholesale.
+
+   Why it is done here rather than page by page: tailwind.config.ts maps every
+   colour, font and shadow token to a CSS variable defined below. Redefining
+   the variable layer restyles every existing screen at once, with no chance of
+   half the app being migrated and the other half not.
+
+   The direction is an editorial ledger: warm paper, ink text, hairline rules,
+   square corners, a serif display face against tabular monospace numerals.
+   Nothing glows; emphasis comes from weight, rules and spacing instead of from
+   neon on black.
+   ========================================================================= */
+
+:root {
+  color-scheme: light;
+
+  /* Type. The display face is a serif stack of fonts that ship with the OS, so
+     headings render correctly even before (or without) any webfont. */
+  --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-body: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* Paper. These four tokens were the dark terminal backgrounds; they are now
+     the paper stack, lightest for raised cards and warmest for the page. */
+  --terminal-950: #f4f1e8; /* page */
+  --terminal-900: #fdfbf5; /* card */
+  --terminal-850: #efebe0; /* sunken / table stripe */
+  --terminal-800: #e6e1d2; /* chip / header cell */
+
+  /* Ink. The slate ramp is inverted: low numbers are now the darkest ink, so
+     existing text-slate-200 / text-slate-400 classes keep their intent
+     (primary text, muted text) while flipping to a light background. */
+  --content-strong: #14110c;
+  --slate-50: #14110c;
+  --slate-100: #1b170f;
+  --slate-200: #241f16; /* primary body text */
+  --slate-300: #3c3425; /* secondary text */
+  --slate-400: #6b6047; /* muted / labels */
+  --slate-500: #736851;
+  --slate-600: #736850;
+  --slate-700: #c9bfa6; /* hairline borders */
+  --slate-800: #ded7c4; /* subtle surfaces */
+  --slate-900: #eae5d6;
+  --slate-950: #f4f1e8;
+
+  /* Accents. Ledger green for the primary action, ink violet as the secondary,
+     and a deliberately un-neon gain/loss pair that stays legible on paper. */
+  --accent-primary: #1f6f5c;
+  --accent-soft: #2c8a73;
+  --accent-secondary: #4b3f9e;
+  --semantic-info: #2a5f9e;
+  --semantic-warning: #9a6413;
+  --semantic-gain: #1a6b4a;
+  --semantic-loss: #a12b2b;
+
+  --grid-line: rgba(20, 17, 12, 0.055);
+  --rule-strong: rgba(20, 17, 12, 0.18);
+  --scroll-track: #efebe0;
+  --scroll-thumb: #c2b79c;
+  --body-glow-a: rgba(31, 111, 92, 0.05);
+  --body-glow-b: rgba(75, 63, 158, 0.04);
+  --shadow-panel: 0 1px 0 rgba(20, 17, 12, 0.05), 0 14px 28px -22px rgba(20, 17, 12, 0.35);
+  --radius-ledger: 2px;
+}
+
+/* =========================================================================
+   Dark variant of the same Ledger design system.
+   -------------------------------------------------------------------------
+   Every token above has a counterpart here so the whole app restyles from
+   one switch, the same way the light "paper" palette restyles it from
+   :root - no component file needs to know which theme is active. Applied
+   via a "dark" class on <html>, toggled by ThemeProvider/ThemeToggle
+   (see components/ThemeProvider.tsx and components/ThemeToggle.tsx) and
+   set before first paint by the inline script in app/layout.tsx to avoid a
+   flash of the wrong theme.
+   ========================================================================= */
+html.dark {
+  color-scheme: dark;
+
+  /* Paper -> ink. Same four-step surface ramp, now dark: darkest for the
+     page, one step up for cards, etc. */
+  --terminal-950: #100e0a; /* page */
+  --terminal-900: #1a170f; /* card */
+  --terminal-850: #211d14; /* sunken / table stripe */
+  --terminal-800: #29241a; /* chip / header cell */
+
+  /* Ink -> paper. Low numbers go back to being the brightest text, matching
+     plain Tailwind slate direction, since text-slate-200 etc. must read as
+     light-on-dark here. */
+  --content-strong: #f6f2e7;
+  --slate-50: #f6f2e7;
+  --slate-100: #ece6d4;
+  --slate-200: #ddd4bb; /* primary body text */
+  --slate-300: #c4b998; /* secondary text */
+  --slate-400: #a49871; /* muted / labels */
+  --slate-500: #928564;
+  --slate-600: #928564;
+  --slate-700: #4c4636; /* hairline borders */
+  --slate-800: #332e22; /* subtle surfaces */
+  --slate-900: #211d14;
+  --slate-950: #100e0a;
+
+  /* Accents brightened slightly for contrast against a dark page. */
+  --accent-primary: #2f9c82;
+  --accent-soft: #3fb495;
+  --accent-secondary: #7b6cd9;
+  --semantic-info: #5b9bdc;
+  --semantic-warning: #d99a3f;
+  --semantic-gain: #34a876;
+  --semantic-loss: #e0685f;
+
+  --grid-line: rgba(246, 242, 231, 0.06);
+  --rule-strong: rgba(246, 242, 231, 0.16);
+  --scroll-track: #1a170f;
+  --scroll-thumb: #4c4636;
+  --body-glow-a: rgba(47, 156, 130, 0.08);
+  --body-glow-b: rgba(123, 108, 217, 0.06);
+  --shadow-panel: 0 1px 0 rgba(0, 0, 0, 0.4), 0 14px 28px -22px rgba(0, 0, 0, 0.6);
+}
+
+* {
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll-thumb) var(--scroll-track);
+}
+
+html {
+  scroll-padding-top: calc(5rem + var(--market-banner-height, 0px));
+  scroll-padding-bottom: 5rem;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--terminal-950);
+  color: var(--slate-200);
+}
+
+/* The page itself is ruled paper: two faint gradients for warmth, plus a
+   repeating horizontal rule that reads as a ledger sheet at low contrast. */
+body {
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  background-image: radial-gradient(circle at 12% -8%, var(--body-glow-a), transparent 26%),
+    radial-gradient(circle at 82% -10%, var(--body-glow-b), transparent 28%),
+    repeating-linear-gradient(180deg, transparent 0 31px, var(--grid-line) 31px 32px);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+/* ---- Square-corner override -------------------------------------------
+   The single rule that carries most of the visual change across screens that
+   were written with rounded-xl / rounded-2xl utilities. rounded-full is left
+   alone on purpose so pills, avatars and status dots stay circular. */
+body :is([class*="rounded-"]):not([class*="rounded-full"]):not(.connection-dot) {
+  border-radius: var(--radius-ledger) !important;
+}
+
+/* ---- Type helpers ------------------------------------------------------ */
+.display-font {
+  font-family: var(--font-display);
+  letter-spacing: -0.01em;
+  font-weight: 600;
+}
+
+h1.display-font,
+h2.display-font {
+  letter-spacing: -0.015em;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+  letter-spacing: -0.01em;
+}
+
+/* Small-caps section labels are a ledger signature. */
+.ledger-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--slate-400);
+}
+
+.ledger-rule {
+  border: 0;
+  border-top: 1px solid var(--rule-strong);
+  margin: 0;
+}
+
+.ledger-double-rule {
+  border: 0;
+  border-top: 3px double var(--rule-strong);
+  margin: 0;
+}
+
+/* Ruled surface, replacing the old dotted terminal grid. */
+.terminal-grid {
+  background-image: repeating-linear-gradient(180deg, transparent 0 27px, var(--grid-line) 27px 28px);
+}
+
+.signal-up {
+  color: var(--semantic-gain);
+}
+
+.signal-down {
+  color: var(--semantic-loss);
+}
+
+/* ---- Panels ------------------------------------------------------------
+   The old .panel-glow drew radial neon washes. On paper the equivalent cue is
+   a hairline border with a printed top rule, so the class keeps its name and
+   its call sites while looking nothing like before. */
+.panel-glow {
+  position: relative;
+  overflow: hidden;
+  background: var(--terminal-900);
+  box-shadow: var(--shadow-panel);
+}
+
+.panel-glow:before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  pointer-events: none;
+  background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary) 60%, transparent);
+  opacity: 0.5;
+}
+
+/* ---- Interaction -------------------------------------------------------
+   No lift and no glow. Hover darkens the rule and tints the paper, which is
+   how a printed form reacts to a pen. */
+.interactive-surface {
+  transition: border-color var(--motion-interaction, 180ms) var(--motion-ease-standard, cubic-bezier(0.2, 0, 0.2, 1)),
+    background-color var(--motion-interaction, 180ms) var(--motion-ease-standard, cubic-bezier(0.2, 0, 0.2, 1)),
+    box-shadow var(--motion-interaction, 180ms) var(--motion-ease-standard, cubic-bezier(0.2, 0, 0.2, 1));
+}
+
+.interactive-surface:hover,
+.interactive-surface:focus-within {
+  border-color: var(--accent-primary);
+  background: rgba(31, 111, 92, 0.05);
+  box-shadow: inset 3px 0 0 var(--accent-primary);
+}
+
+.price-flash-up {
+  animation: flashUp var(--motion-price-tint, 360ms) var(--motion-ease-decelerate, cubic-bezier(0.05, 0.7, 0.1, 1));
+}
+
+.price-flash-down {
+  animation: flashDown var(--motion-price-tint, 360ms) var(--motion-ease-decelerate, cubic-bezier(0.05, 0.7, 0.1, 1));
+}
+
+@keyframes flashUp {
+  0% {
+    background: rgba(26, 107, 74, 0.16);
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+@keyframes flashDown {
+  0% {
+    background: rgba(161, 43, 43, 0.16);
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+/* Connection state reads as a printed square rather than a pulsing LED. */
+.connection-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 0;
+  display: inline-block;
+}
+
+.connection-dot.live {
+  color: var(--semantic-gain);
+  background: currentColor;
+  animation: pulseInk 2s infinite;
+}
+
+.connection-dot.rest {
+  color: var(--semantic-warning);
+  background: currentColor;
+}
+
+.connection-dot.stale {
+  color: var(--semantic-loss);
+  background: transparent;
+  border: 1px solid currentColor;
+}
+
+@keyframes pulseInk {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(20, 17, 12, 0.04),
+    rgba(20, 17, 12, 0.09),
+    rgba(20, 17, 12, 0.04)
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.2s linear infinite;
+}
+
+@keyframes shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* ---- Mosaic (dashboard window manager) -------------------------------- */
+.stockpilot-mosaic .mosaic {
+  background: var(--terminal-950);
+}
+
+.stockpilot-mosaic .mosaic-window {
+  border: 1px solid var(--slate-700);
+  box-shadow: var(--shadow-panel);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.stockpilot-mosaic .mosaic-window:hover {
+  border-color: var(--accent-primary);
+}
+
+.stockpilot-mosaic .mosaic-window-toolbar {
+  background: var(--terminal-800);
+  color: var(--slate-300);
+  border-bottom: 1px solid var(--slate-700);
+  box-shadow: none;
+}
+
+.stockpilot-mosaic .mosaic-window-title {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.stockpilot-mosaic .mosaic-window-body {
+  background: var(--terminal-900);
+}
+
+.stockpilot-mosaic .mosaic-split.-row,
+.stockpilot-mosaic .mosaic-split.-column {
+  background: var(--slate-700);
+}
+
+.stockpilot-mosaic .mosaic-split:hover {
+  background: var(--accent-primary);
+}
+
+/* ---- Motion and focus -------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *:before,
+  *:after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  button:not(:disabled):active,
+  [role="tab"]:active,
+  .interactive-surface:active,
+  .interactive-surface:hover {
+    transform: none !important;
+  }
+}
+
+.reveal-card {
+  animation: revealIn var(--motion-page, 220ms) var(--motion-ease-decelerate, cubic-bezier(0.05, 0.7, 0.1, 1));
+}
+
+@keyframes revealIn {
+  from {
+    opacity: 0;
+    transform: translateY(var(--motion-translate-page, 6px));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.stockpilot-chart-cursor {
+  cursor: crosshair;
+}
+
+button:not(:disabled),
+a,
+[role="tab"],
+[role="button"],
+.interactive-surface {
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-secondary);
+  outline-offset: 2px;
+  border-radius: 0;
+}
+
+/* The header keeps a distinguishing mark, but it is a printed masthead rule
+   instead of a drifting glow. */
+.stockpilot-header-glow {
+  isolation: isolate;
+  background: var(--terminal-900);
+  border-bottom: 1px solid var(--rule-strong);
+}
+
+.stockpilot-header-glow:after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -3px;
+  height: 1px;
+  background: var(--rule-strong);
+  pointer-events: none;
+}
+
+/* Tables read as ledgers: striped rows, ruled header, tabular numerals. */
+table {
+  border-collapse: collapse;
+}
+
+thead th {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--slate-400);
+  border-bottom: 1px solid var(--rule-strong);
+}
+
+tbody tr:nth-child(even) {
+  background: rgba(20, 17, 12, 0.022);
+}
+
+::selection {
+  background: rgba(31, 111, 92, 0.18);
+}

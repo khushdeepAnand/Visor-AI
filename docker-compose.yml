@@ -1,0 +1,140 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-stockpilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-stockpilot}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # First-boot bootstrap: run Alembic migrations before API starts.
+      - ./alembic:/app/alembic:ro
+      - ./alembic.ini:/app/alembic.ini:ro
+      - ./scripts/run_migrations.py:/app/run_migrations.py:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-stockpilot} -d $${POSTGRES_DB:-stockpilot}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # Not published to the host by default; uncomment to debug locally.
+    # ports:
+    #   - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    env_file: .env
+    environment:
+      STOCKPILOT_DB_TYPE: postgresql
+      STOCKPILOT_DATABASE_URL: postgresql://${POSTGRES_USER:-stockpilot}:${POSTGRES_PASSWORD:-stockpilot}@postgres:5432/${POSTGRES_DB:-stockpilot}
+      STOCKPILOT_REDIS_ENABLED: "true"
+      REDIS_URL: redis://redis:6379/0
+      STOCKPILOT_CELERY_BROKER_URL: redis://redis:6379/0
+      STOCKPILOT_TASK_QUEUE_ENABLED: "true"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./database:/app/database
+      - ./cache:/app/cache
+      - ./logs:/app/logs
+      - ./secrets:/run/secrets:ro
+    # TLS: terminate at a reverse proxy (caddy/traefik/nginx) in front of
+    # this service, or mount certs and run uvicorn with --ssl-certfile.
+    # The app itself speaks plain HTTP inside the compose network.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/ready', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    env_file: .env
+    environment:
+      STOCKPILOT_DB_TYPE: postgresql
+      STOCKPILOT_DATABASE_URL: postgresql://${POSTGRES_USER:-stockpilot}:${POSTGRES_PASSWORD:-stockpilot}@postgres:5432/${POSTGRES_DB:-stockpilot}
+      REDIS_URL: redis://redis:6379/0
+      STOCKPILOT_CELERY_BROKER_URL: redis://redis:6379/0
+      STOCKPILOT_TASK_QUEUE_ENABLED: "true"
+    command: ["celery", "-A", "services.task_queue.celery_app", "worker", "-Q", "forecast,default", "-l", "info", "--concurrency", "2"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      STOCKPILOT_CELERY_BROKER_URL: redis://redis:6379/0
+      STOCKPILOT_TASK_QUEUE_ENABLED: "true"
+    command: ["celery", "-A", "services.task_queue.celery_app", "beat", "-l", "info"]
+    depends_on:
+      - redis
+    volumes:
+      - ./logs:/app/logs
+
+  # Nightly logical backup of Postgres to ./backups (host-mounted).
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-stockpilot}
+      POSTGRES_USER: ${POSTGRES_USER:-stockpilot}
+      POSTGRES_DB: ${POSTGRES_DB:-stockpilot}
+    command: >
+      sh -c 'mkdir -p /backups &&
+             until pg_isready -h postgres -U "$$POSTGRES_USER"; do sleep 2; done &&
+             while true; do
+               pg_dump -h postgres -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -Fc -f "/backups/stockpilot-$(date +%Y%m%d-%H%M%S).dump" &&
+               find /backups -name "stockpilot-*.dump" -mtime +14 -delete;
+               sleep 86400;
+             done'
+    volumes:
+      - ./backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE: http://localhost:8000
+        NEXT_PUBLIC_WS_BASE: ws://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  redis_data:

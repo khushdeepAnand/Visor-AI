@@ -1,0 +1,5 @@
+# Optional research/NLP/deep-learning extras. Core boosters are already in requirements.txt.
+-r requirements.txt
+transformers>=4.48,<6.0
+torch>=2.5,<3.0
+shap>=0.46,<1.0

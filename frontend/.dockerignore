@@ -1,0 +1,14 @@
+.env
+.env.local
+.env.*.local
+node_modules
+.next
+out
+dist
+test-results
+playwright-report
+blob-report
+screenshots
+*.log
+*.zip
+tsconfig.tsbuildinfo

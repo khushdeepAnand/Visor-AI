@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "StockPilot AI — Local Runtime Architecture",
+    "locale": "en",
+    "output": ".archify/architecture-stockpilot-20261004-020234/stockpilot.html",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    {"id":"trader","type":"external","label":"Trader browser","sublabel":"Research and paper simulation","pos":[40,40],"size":[210,74]},
+    {"id":"terminal","type":"frontend","label":"Next.js terminal","sublabel":"React / TanStack Query :3000","pos":[350,40],"size":[210,74]},
+    {"id":"api","type":"backend","label":"FastAPI boundary","sublabel":"Uvicorn :8000 / REST + WS","pos":[660,40],"size":[210,74]},
+    {"id":"identity","type":"security","label":"Identity and secrets","sublabel":"JWT / MFA / Windows DPAPI","pos":[980,40],"size":[210,74]},
+    {"id":"domains","type":"backend","label":"Domain routers","sublabel":"Market / research / paper / admin","pos":[660,245],"size":[210,80]},
+    {"id":"market","type":"backend","label":"Market data subsystem","sublabel":"Provider policy + quote fan-out","pos":[350,245],"size":[210,80]},
+    {"id":"providers","type":"external","label":"Indian market sources","sublabel":"Upstox / vendors / fallbacks","pos":[40,245],"size":[210,80]},
+    {"id":"database","type":"database","label":"Local SQLite ledger","sublabel":"Users / forecasts / paper / audit","pos":[980,245],"size":[210,80]},
+    {"id":"engine","type":"backend","label":"Forecast execution","sublabel":"Bounded jobs + interval models","pos":[660,465],"size":[210,80]},
+    {"id":"cache","type":"database","label":"Market history cache","sublabel":"Memory / JSON / optional Redis","pos":[350,465],"size":[210,80]},
+    {"id":"maintenance","type":"backend","label":"Scheduled maintenance","sublabel":"Opt-in APScheduler jobs","pos":[980,465],"size":[210,80]},
+    {"id":"promotion","type":"security","label":"Model promotion gate","sublabel":"Fresh receipt / canary / rollback","pos":[660,680],"size":[210,80]}
+  ],
+  "connections": [
+    {"id":"browser-terminal","from":"trader","to":"terminal","label":"HTTP UI","variant":"emphasis"},
+    {"id":"terminal-api","from":"terminal","to":"api","label":"REST / WS","variant":"emphasis"},
+    {"id":"api-identity","from":"api","to":"identity","label":"Verify session","variant":"security"},
+    {"id":"api-domains","from":"api","to":"domains","label":"Dispatch"},
+    {"id":"domains-market","from":"domains","to":"market","label":"Quote / history"},
+    {"id":"market-provider","from":"market","to":"providers","label":"Mode policy"},
+    {"id":"domains-ledger","from":"domains","to":"database","label":"Scoped SQL"},
+    {"id":"domains-engine","from":"domains","to":"engine","label":"Forecast jobs","variant":"dashed"},
+    {"id":"market-cache","from":"market","to":"cache","label":"Read / write"},
+    {"id":"maintenance-engine","from":"maintenance","to":"engine","label":"Opt-in refresh","variant":"dashed"},
+    {"id":"maintenance-ledger","from":"maintenance","to":"database","label":"Settle / retain","variant":"dashed"},
+    {"id":"engine-gate","from":"engine","to":"promotion","label":"Gate receipt","variant":"security"}
+  ],
+  "cards": [
+    {"dot":"cyan","title":"Browser and runtime","items":["Windows launchers manage Next.js and Uvicorn, verify readiness, and clean up child process trees.","REST uses the Next.js same-origin proxy. Quote WebSockets connect to the backend with approved browser origins.","Charts, watchlists, portfolio, screener, sectors, sentiment, brief, reports and strategy tools share the API."]},
+    {"dot":"amber","title":"Market-data trust","items":["LIVE_ONLY refuses unavailable live data. FALLBACK_ALLOWED permits labelled fallback. OFFLINE_DEMO is explicitly synthetic.","Upstox streams feed the quote hub. Stale or unavailable streaming resumes shared REST polling.","Catalogue validation restricts inputs to NSE/BSE instruments. Calendar, corporate actions and provenance support forecasting."]},
+    {"dot":"emerald","title":"Forecast and analytical path","items":["Domain orchestration loads provider history before calling forecast execution. Identical content shares one producer and cached results.","Interval forecasting uses chronological fitting, calibration and regime components; publication guardrails can refuse output.","CQR affects bounds only with a passed gate, canary assignment and residuals. Settlement feeds track-record and drift monitoring.","Risk, backtests, options Greeks, expiry payoff and approximate margin are analytical tools. Paper orders never execute through a broker."]},
+    {"dot":"violet","title":"Persistence and optional deployment","items":["The inspected normal API path uses database/stockpilot.db with SQLite WAL. A root stockpilot.db is a separate legacy file.","Windows DPAPI secrets live under LOCALAPPDATA/StockPilotAI, outside the release payload.","PostgreSQL DAO, Alembic, Celery/Redis, licensed feeds, email, OAuth, passkeys and telemetry are optional capabilities; this diagram does not claim deployment verification."]},
+    {"dot":"slate","title":"Evidence and release","items":["Inspected local files on 2026-10-04. No Git repository or pinned revision exists; source citations are in the companion audit.","The repaired ZIP includes the API generator and migration assets. The release gate checks required runtime inputs and excludes private runtime data.","This is the current local architecture. Detailed source citations and remaining risks appear in AUDIT_2026-10-04.md."]}
+  ]
+}

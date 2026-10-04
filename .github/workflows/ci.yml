@@ -1,0 +1,191 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 3 * * *"
+
+jobs:
+  promotion-gate:
+    name: Promotion gate (fail closed)
+    # Release tags must prove the live replay gate; ordinary CI remains offline.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Install gate dependencies
+        run: pip install -r requirements.txt
+      - name: Run forecast replay gate
+        env:
+          STOCKPILOT_ENV: test
+        run: python scripts/verify_forecast_gate.py
+
+  challenger-reconciliation:
+    name: CQR challenger reconciliation
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconcile artifacts (missing artifacts alert and fails closed)
+        run: python scripts/reconcile_challenger.py artifacts/fresh-gate.json artifacts/cqr-challenger.json
+
+  secret-scan:
+    name: Secret scan (fail closed)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run secret scanner across the whole tree
+        run: python scripts/scan_secrets.py .
+      - name: Verify allowlisted release inputs
+        run: python scripts/verify_release_inputs.py
+      - name: Verify required documents
+        run: python scripts/check_required_docs.py
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  mutation:
+    name: Broad critical-path mutation campaign
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: sudo apt-get update && sudo apt-get install -y libsqlcipher-dev
+      - run: pip install -r requirements-mutation.txt
+      - name: Run real mutants against collected tests
+        env:
+          STOCKPILOT_ENV: test
+        run: mutmut run
+      - name: Publish mutation results
+        if: always()
+        run: mutmut results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-campaign
+          path: mutants/
+
+  semgrep:
+    name: Semgrep SAST
+    runs-on: ubuntu-latest
+    container: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+      - run: semgrep scan --config p/security-audit --error api services forecasting middleware
+
+  trivy:
+    name: Trivy filesystem and container inputs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aquasecurity/trivy-action@0.35.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+
+  backend:
+    name: Backend verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          sudo apt-get update && sudo apt-get install -y libsqlcipher-dev
+          pip install -r requirements-dev.txt
+      - name: mypy
+        run: python -m mypy --config-file mypy.ini .
+      - name: pip-audit
+        run: python -m pip_audit --local
+      - name: Bandit (generic backend SAST, fail on Medium+)
+        run: python -m bandit -r api middleware services scripts forecasting analytics derivatives -q -ll
+      - name: Alembic migrations compile (offline PostgreSQL SQL generation)
+        env:
+          STOCKPILOT_ENV: test
+          PYTHONIOENCODING: utf-8
+          STOCKPILOT_DATABASE_URL: postgresql+psycopg2://ci@127.0.0.1:5432/stockpilot
+        run: alembic upgrade head --sql > /dev/null
+      - name: OpenAPI schema drift check
+        env:
+          STOCKPILOT_ENV: test
+        run: python scripts/export_openapi.py --check
+      - name: pytest
+        env:
+          STOCKPILOT_ENV: test
+        run: python -m pytest -q -W error -p no:randomly --ignore=tests/test_windows_launchers.py
+      - name: Critical auth, IDOR and forecast mutation gate
+        run: python scripts/check_critical_mutations.py
+      - name: Sanitized release and extracted import/smoke integrity
+        run: python scripts/build_release.py --skip-backend-verification --skip-frontend-verification --skip-launcher-verification
+
+  frontend:
+    name: Frontend verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --no-fund --no-audit
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Install E2E backend and browser
+        run: |
+          sudo apt-get update && sudo apt-get install -y libsqlcipher-dev
+          python -m venv .venv
+          .venv/bin/pip install -r requirements-dev.txt
+          cd frontend
+          npx playwright install --with-deps chromium
+      - name: Generated API client drift check
+        working-directory: frontend
+        run: npm run check:api
+      - name: Typecheck
+        working-directory: frontend
+        run: npm run typecheck
+      - name: Vitest
+        working-directory: frontend
+        run: npm run test
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+      - name: npm production audit
+        working-directory: frontend
+        run: npm run audit:prod
+      - name: Browser lifecycle and accessibility tests
+        working-directory: frontend
+        run: npm run test:e2e
+
+  ref-check:
+    name: Dangling reference check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Install check dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y libsqlcipher-dev
+          pip install -r requirements-dev.txt
+      - name: Run dangling reference check
+        run: python scripts/check_dangling_refs.py

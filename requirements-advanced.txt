@@ -1,0 +1,3 @@
+# Backward-compatible alias. LightGBM/CatBoost are the mandatory booster deps
+# (XGBoost is out of scope: removed from the tree in the 2026-09 audit).
+-r requirements-research.txt
