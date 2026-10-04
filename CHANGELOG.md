@@ -218,9 +218,10 @@
 - publish verified StockPilot v18 foundation
 
 ### Fixes
+- E2E test robustness - screener wait for mutation, URL redirect expectations, gitleaks config, rate limit retry
 - flaky E2E tests - robust research/screener assertions
 - CI failures - strict mode selector, system endpoint error handling, mypy Windows constants
 
 ### Maintenance
-- fix gitleaks config - use .gitleaks.toml allowlist for path-based false positives
 - update changelog
+- fix gitleaks config - use .gitleaks.toml allowlist for path-based false positives
