@@ -1,0 +1,8 @@
+[allowlist]
+description = "Known false positives from initial import - prose, historical scenario IDs, and deliberately fake redaction-test values"
+paths = [
+  "CHANGELOG.md",
+  "services/historical_replay.py",
+  "tests/test_phase4_security.py",
+  "tests/test_logging_redaction.py",
+]

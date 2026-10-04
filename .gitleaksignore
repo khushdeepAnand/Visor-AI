@@ -1,7 +1,3 @@
 # Reviewed findings in the initial import only: prose, historical scenario IDs,
 # and deliberately fake redaction-test values. Future commits remain scanned.
-# Path:pattern format - ignores matches in these files regardless of commit
-CHANGELOG.md:generic-api-key
-services/historical_replay.py:generic-api-key
-tests/test_phase4_security.py:generic-api-key
-tests/test_logging_redaction.py:generic-api-key
+# Use a proper gitleaks config instead of .gitleaksignore for path-based allowlist
