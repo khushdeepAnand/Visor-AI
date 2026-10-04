@@ -2,7 +2,7 @@ import { expect, type Page } from "@playwright/test";
 
 const ORIGIN = "http://localhost:3000";
 
-async function getSystemWithRetry(page: Page, maxRetries = 5): Promise<any> {
+async function getSystemWithRetry(page: Page, maxRetries = 8): Promise<any> {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     const system = await page.request.get("/api/v1/system");
     if (system.ok()) {
@@ -13,10 +13,10 @@ async function getSystemWithRetry(page: Page, maxRetries = 5): Promise<any> {
       await page.waitForTimeout(Math.min(retryAfter * 1000, 5000));
       continue;
     }
-    // Return failed response instead of throwing - let caller decide
+    // Non-429 error, return immediately
     return system;
   }
-  // Last attempt
+  // All retries exhausted - return last attempt (may be 429)
   const system = await page.request.get("/api/v1/system");
   return system;
 }
