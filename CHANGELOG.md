@@ -222,4 +222,5 @@
 - CI failures - strict mode selector, system endpoint error handling, mypy Windows constants
 
 ### Maintenance
+- fix gitleaks config - use .gitleaks.toml allowlist for path-based false positives
 - update changelog
