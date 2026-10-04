@@ -218,6 +218,7 @@
 - publish verified StockPilot v18 foundation
 
 ### Fixes
+- flaky E2E tests - robust research/screener assertions
 - CI failures - strict mode selector, system endpoint error handling, mypy Windows constants
 
 ### Maintenance
