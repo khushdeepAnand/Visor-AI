@@ -39,6 +39,11 @@ export default defineConfig({
         // shipped abuse-control default (5 accounts / 5 min per IP). Raise the
         // test-environment register budget only; production defaults are untouched.
         STOCKPILOT_REGISTER_RATE_LIMIT: "200",
+        // The general request budget (120/min per IP) is shared by every API
+        // call from all parallel Playwright workers, so a burst can trip 429
+        // mid-run (seen on hosted CI). Raise the test-environment budget only;
+        // production defaults are untouched.
+        STOCKPILOT_RATE_LIMIT_REQUESTS: "600",
       },
       url: `http://127.0.0.1:${apiPort}/api/v1/ready`,
       reuseExistingServer: false,
