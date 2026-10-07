@@ -19,7 +19,7 @@ from .base import (
     DAOFactory,
 )
 
-from database import get_connection, _open_connection
+from database import get_connection, _open_connection, database_row
 
 
 class SQLiteDatabase(DatabaseInterface):
@@ -27,7 +27,7 @@ class SQLiteDatabase(DatabaseInterface):
     
     def __init__(self, conn: Optional[sqlite3.Connection] = None):
         self._conn = conn or get_connection()
-        self._conn.row_factory = sqlite3.Row
+        self._conn.row_factory = database_row
     
     def get_connection(self) -> sqlite3.Connection:
         return self._conn

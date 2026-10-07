@@ -1,5 +1,25 @@
 # Administrator Operations
 
+## v18 account, compliance and queue workspace
+
+`/operations` supports directory search/MFA/account-age/login-anomaly filters.
+Support operators read account/compliance metadata but cannot mutate it; model
+operators cannot access it. Admins may select up to 100 accounts for suspension,
+reinstatement, force logout, lockout reset or MFA reset. A 12–160 character
+explicit justification and single-use password step-up are required. Validation,
+state changes and per-account audit records commit together or all roll back.
+MFA reset removes factors/recovery codes, consumes pending challenges, revokes
+sessions and increments token versions; use established account-recovery proof.
+
+The persistent regulatory checklist stores status/evidence references. Operator
+completion claims are not independent review evidence. Disclosure acknowledgments
+are checked against the current version and survive until account erasure.
+
+The queue console shows broker health, sanitized dead letters and configured beat
+intervals. Admins can trigger retention, instruments, encrypted backups and decay,
+or retry failed jobs with step-up/reason. Arguments, tracebacks and raw errors
+are excluded. Live worker inspection/next-run and restart/load proof remain open.
+
 The v7 RC adds audited runtime provider reordering and account lifecycle actions
 (`suspend`, `reinstate`, `force_logout`, and lockout reset). These controls expose
 only an account ID and action result. They do not expose portfolios, watchlists,
@@ -156,3 +176,25 @@ writes credentials, enables a feature flag, or touches an order path. The UI ent
 Operational note: a symbol whose `support_state` is `baseline_only` or `abstained` on the
 calibration endpoint is not a bug to be fixed by tuning. It is the honest result of that symbol's
 own history, and suppressing it would break the range contract.
+# v18 operational roles and model controls
+
+Configure `STOCKPILOT_SUPPORT_OPS_EMAILS` and `STOCKPILOT_MODEL_OPS_EMAILS` as
+comma-separated allowlists. Existing accounts must be assigned stored roles via
+`bootstrap_operational_roles()` or the admin-only, step-up-protected
+`POST /api/v1/admin/operational-roles/bootstrap` endpoint. An email allowlist alone
+does not grant a role. Public registration cannot choose one. Removing an email
+from its allowlist immediately invalidates the operational privilege.
+
+The `/operations` page exposes role-appropriate controls. Support operations can
+read account metadata and the admin audit endpoint; it cannot change permissions
+or models. Model operations can inspect signed model history and gate scorecards,
+roll back to a prior unexpired/non-revoked gated artifact, and pause/resume tiers;
+it cannot read the user directory or perform account mutations. Admins retain the
+existing three-identity ceiling and step-up protection for general operations.
+
+Set a persistent `STOCKPILOT_AUDIT_SECRET` of at least 32 bytes before model changes.
+Every rollback/pause/resume requires a justification of at least 12 characters.
+Missing signing keys and failed integrity checks fail closed. Tier pauses apply
+to primary and multi-horizon publication and invalidate forecast cache keys.
+Automatic widening remains latched until reviewed re-promotion; resuming an
+operator pause does not silently clear a live-decay widening decision.

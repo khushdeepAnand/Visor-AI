@@ -51,7 +51,7 @@ def explain_stacked_tree_ensemble(
         }
 
     try:
-        import shap  # type: ignore[import-not-found]
+        import shap
     except ImportError:
         return {
             "available": False,

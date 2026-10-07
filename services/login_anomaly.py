@@ -21,6 +21,7 @@ the session so the UI can show a "new sign-in" notice.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import math
 import os
@@ -100,14 +101,11 @@ def ip_prefix(ip: str | None) -> str:
     """Coarse network prefix: /24 for IPv4, /48 for IPv6 (privacy + matching)."""
     if not ip:
         return "unknown"
-    ip = ip.strip()
-    if ":" in ip:  # IPv6
-        parts = ip.split(":")
-        return ":".join(parts[:3]) + "::/48"
-    parts = ip.split(".")
-    if len(parts) == 4:
-        return f"{parts[0]}.{parts[1]}.{parts[2]}.0/24"
-    return "unknown"
+    try:
+        address = ipaddress.ip_address(ip.strip())
+        return str(ipaddress.ip_network(f"{address}/{24 if address.version == 4 else 48}", strict=False))
+    except ValueError:
+        return "unknown"
 
 
 # ---------------------------------------------------------------------
@@ -193,11 +191,22 @@ def _record_login_inner(
             (int(user_id), device_hash),
         ).fetchone()
 
-        new_device = existing is None
+        last_seen = _parse_time(existing[3]) if existing else None
+        new_device = existing is None or last_seen is None or at - last_seen > timedelta(days=NEW_DEVICE_WINDOW_DAYS)
         impossible_travel = False
         travel_detail = None
         previous_coords = None
         prev_time = None
+        # Fingerprints include the network prefix. Comparing only that fingerprint
+        # made travel detection blind to the very network changes it must detect.
+        previous = conn.execute(
+            "SELECT lat, lon, last_seen FROM login_devices WHERE user_id=? ORDER BY last_seen DESC LIMIT 1",
+            (int(user_id),),
+        ).fetchone()
+        if previous:
+            if previous[0] is not None and previous[1] is not None:
+                previous_coords = (float(previous[0]), float(previous[1]))
+            prev_time = _parse_time(previous[2])
 
         if existing is None:
             conn.execute(
@@ -211,9 +220,6 @@ def _record_login_inner(
                  at.isoformat(), at.isoformat()),
             )
         else:
-            if existing[1] is not None and existing[2] is not None:
-                previous_coords = (float(existing[1]), float(existing[2]))
-            prev_time = _parse_time(existing[3])
             conn.execute(
                 "UPDATE login_devices SET last_seen=?, seen_count=seen_count+1, "
                 "ip_prefix=?, lat=?, lon=? WHERE id=?",
@@ -225,10 +231,10 @@ def _record_login_inner(
         # Impossible travel: only when both coordinates are known and the
         # implied speed exceeds the configured threshold.
         if (
-            not new_device
-            and previous_coords is not None
+            previous_coords is not None
             and coords is not None
             and prev_time is not None
+            and at >= prev_time
         ):
             distance = haversine_km(previous_coords, coords)
             hours = max((at - prev_time).total_seconds() / 3600.0, 1e-6)

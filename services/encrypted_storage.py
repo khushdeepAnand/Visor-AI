@@ -7,6 +7,8 @@ import json
 import os
 import sqlite3
 import tempfile
+import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -128,3 +130,43 @@ def restore_encrypted_backup(source: Path, target: Path, secret: str, *, databas
         target.unlink(missing_ok=True)
         raise
     return {"verified": True, "sha256": payload["sha256"]}
+
+
+def backup_and_rehearse(sources: list[Path], destination: Path, secret: str, *,
+                       database_key: str | None = None, retention_days: int = 30) -> dict[str, Any]:
+    """Create authenticated snapshots and perform a restore drill on every run.
+
+    Plaintext SQLite is restored only in memory. SQLCipher drills use encrypted
+    temporary storage. Old snapshots are removed only after every current source
+    has passed its drill. External/off-host copies remain operator responsibility.
+    """
+    cipher = _backup_cipher(secret)
+    if not 7 <= retention_days <= 365:
+        raise ValueError("Backup retention must be between 7 and 365 days")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:12]
+    backups = []
+    for source in sources:
+        target = destination / f"{source.name}-{stamp}.enc"
+        result = create_encrypted_backup(source.resolve(), target, secret, database_key=database_key)
+        if database_key:
+            with tempfile.TemporaryDirectory(prefix="stockpilot-restore-drill-") as directory:
+                restored = restore_encrypted_backup(target, Path(directory) / "restored.db", secret, database_key=database_key)
+                if restored["sha256"] != result["sha256"]:
+                    raise RuntimeError("Restore drill content mismatch")
+        else:
+            payload = json.loads(cipher.decrypt(target.read_bytes()))
+            data = base64.b64decode(payload["data"], validate=True)
+            if hashlib.sha256(data).hexdigest() != result["sha256"]:
+                raise RuntimeError("Restore drill content mismatch")
+            with sqlite3.connect(":memory:") as conn:
+                conn.deserialize(data)
+                if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                    raise RuntimeError("Restore drill database integrity failed")
+        backups.append({"path": str(target), **result, "restore_verified": True})
+    if backups:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).timestamp()
+        for source in sources:
+            for previous in destination.glob(f"{source.name}-*.enc"):
+                if previous.stat().st_mtime < cutoff:
+                    previous.unlink()
+    return {"backups": backups, "completed_at": datetime.now(timezone.utc).isoformat()}

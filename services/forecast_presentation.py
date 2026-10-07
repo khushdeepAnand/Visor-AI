@@ -14,6 +14,7 @@ reason.
 from __future__ import annotations
 
 from typing import Any
+from copy import deepcopy
 
 from services.model_registry import PUBLIC_MODEL_LABEL
 from services.expected_move import crossover_vs_forecast
@@ -216,6 +217,8 @@ def _expected_move_public(
 
 def public_forecast(result: dict[str, Any], provenance: dict[str, Any] | None = None, expected_move: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build the payload a normal user is allowed to see."""
+    from forecasting.live_decay import apply_tier_controls
+    result = apply_tier_controls(deepcopy(result))
     forecast = dict(result.get("forecast") or {})
     validation = dict(result.get("validation") or {})
     drift = dict(result.get("drift") or {})
@@ -248,6 +251,9 @@ def public_forecast(result: dict[str, Any], provenance: dict[str, Any] | None = 
     if abstained:
         supported = False
         reason = str(result.get("abstention_reason") or "No numerical range was released because a trust gate was blocked.")
+    if (result.get("live_control") or {}).get("action") == "widen":
+        supported = False
+        reason = "Live undercoverage required widening; adjusted coverage is not yet verified."
     observation_zone: dict[str, Any] | None = None
     risk_zone: dict[str, Any] | None = None
     if supported:
@@ -336,6 +342,13 @@ def public_forecast(result: dict[str, Any], provenance: dict[str, Any] | None = 
         "disclaimer": DISCLAIMER,
     }
 
+    if result.get("live_control"):
+        payload["live_control"] = result["live_control"]
+        if result["live_control"].get("action") == "widen":
+            payload["confidence"] = {"level": "low", "summary": "Sustained live undercoverage required widening; adjusted coverage is not yet verified."}
+        elif result["live_control"].get("action") == "pause":
+            payload["confidence"] = {"level": "low", "summary": "Forecast publication is paused; no numerical range is available."}
+
     # v13: Data tier, evidence grade, and reason (honest disclosure)
     if "tier" in result:
         payload["tier"] = result["tier"]
@@ -359,7 +372,7 @@ def public_forecast(result: dict[str, Any], provenance: dict[str, Any] | None = 
         payload["circuit_clip"] = payload["forecast"].pop("circuit_clip")
 
     # v13: Fan chart (distributional output)
-    if "fan_chart" in result:
+    if "fan_chart" in result and not result.get("live_control"):
         payload["fan_chart"] = result["fan_chart"]
 
     # v13: Min width floor applied
@@ -399,6 +412,8 @@ def present_compare_item(item: dict[str, Any], *, is_admin: bool = False) -> dic
     plain-language confidence and uncertainty only. The diagnostic blocks are
     removed for everyone except an administrator.
     """
+    from forecasting.live_decay import apply_tier_controls
+    item = apply_tier_controls(deepcopy(item))
     forecast = dict(item.get("forecast") or {})
     validation = dict(item.get("validation") or {})
     drift = dict(item.get("drift") or {})
@@ -427,6 +442,8 @@ def present_compare_item(item: dict[str, Any], *, is_admin: bool = False) -> dic
         "confidence_level": forecast.get("confidence_level"),
     }
     public["confidence"] = _confidence(validation, drift, evidence_grade, width_pct=width_pct, trust=item.get("trust"))
+    if item.get("live_control"):
+        public["confidence"] = {"level": "low", "summary": str(item["live_control"].get("reason"))}
     public["uncertainty"] = {"range_width_pct": width_pct, "band": _width_words(width_pct)}
     public["evidence"] = evidence or {
         "grade": "none",

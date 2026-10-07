@@ -37,6 +37,7 @@ from forecasting.model_promotion import (  # noqa: E402
     decide_promotion,
     manifest_path,
     manifest_status,
+    revoke_promotion,
 )
 from forecasting.promotion_gate import PromotionGateConfig  # noqa: E402
 
@@ -73,6 +74,7 @@ def _load_tier_results(path: Path) -> dict[str, SimpleNamespace]:
             diebold_mariano=SimpleNamespace(
                 reject_null=bool(dm.get("reject_null")),
                 p_value=float(dm.get("p_value", 1.0)),
+                dm_statistic=float(dm.get("dm_statistic", "nan")),
             )
             if isinstance(dm, dict)
             else None,
@@ -124,12 +126,8 @@ def _cmd_revoke(args: argparse.Namespace) -> int:
     if not target.exists():
         print(f"nothing to revoke: {target} does not exist", file=sys.stderr)
         return 0
-    archive = target.with_suffix(".revoked.json")
-    payload = json.loads(target.read_text(encoding="utf-8"))
-    payload["revoked"] = {"reason": args.reason, "revoked_by": "promote_model.py --revoke"}
-    archive.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
-    target.unlink()
-    print(f"revoked promotion manifest; audit copy at {archive}")
+    revoke_promotion(reason=args.reason, actor="promote_model.py", manifest=target)
+    print("revoked promotion manifest; signed decision retained in append-only registry")
     return 0
 
 

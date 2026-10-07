@@ -9,10 +9,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/lib/auth";
 import { api, formatApiError } from "@/lib/api";
+import { PasskeyPanel } from "@/components/PasskeyPanel";
 
 type OAuthStatus = { google: { configured: boolean } };
 type Session = { id: number; issued_at: string; expires_at: string; revoked_at?: string | null; device_label: string; current: boolean };
-type MfaStatus = { enabled: boolean; recovery_codes_remaining: number };
+type MfaStatus = { enabled: boolean; totp_enabled?: boolean; recovery_codes_remaining: number };
 type MfaSetup = { secret: string; provisioning_uri: string };
 
 export default function AccountPage() {
@@ -23,8 +24,8 @@ export default function AccountPage() {
   const oauth = useQuery({ queryKey: ["oauth-status"], queryFn: () => api<OAuthStatus>("/api/v1/auth/oauth/status"), staleTime: 60_000, retry: false, enabled: sessionStatus === "authenticated" });
   const sessions = useQuery({ queryKey: ["sessions"], queryFn: () => api<{items: Session[]}>("/api/v1/auth/sessions"), enabled: sessionStatus === "authenticated" });
   const mfa = useQuery({ queryKey: ["mfa-status"], queryFn: () => api<MfaStatus>("/api/v1/auth/mfa"), enabled: sessionStatus === "authenticated" });
-  const logout = useMutation({ mutationFn: async () => { await signOut(); }, onSuccess: () => { qc.clear(); router.replace("/login"); } });
-  const logoutAll = useMutation({ mutationFn: () => api("/api/v1/auth/logout-all", { method: "POST" }), onSuccess: () => { qc.clear(); router.replace("/login"); } });
+  const logout = useMutation({ mutationFn: signOut, onSuccess: () => router.replace("/login") });
+  const logoutAll = useMutation({ mutationFn: async () => { await api("/api/v1/auth/logout-all", { method: "POST" }); await signOut(); }, onSuccess: () => router.replace("/login") });
   const revokeOne = useMutation({ mutationFn: (id: number) => api(`/api/v1/auth/sessions/${id}`, { method: "DELETE" }), onSuccess: () => qc.invalidateQueries({ queryKey: ["sessions"] }) });
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [mfaSetup, setMfaSetup] = useState<MfaSetup | null>(null);
@@ -54,6 +55,7 @@ export default function AccountPage() {
   const providers = (user?.connected_providers ?? []).filter((p) => p !== "apple");
   const primary = user?.auth_provider ?? "password";
   const googleOk = Boolean(oauth.data?.google.configured);
+  const totpEnabled = mfa.data?.totp_enabled ?? mfa.data?.enabled;
 
   return (
     <TerminalShell>
@@ -80,8 +82,8 @@ export default function AccountPage() {
           </CardContent></Card>
 
           <Card className="panel-glow"><CardHeader><CardTitle>Two-factor authentication</CardTitle></CardHeader><CardContent className="space-y-3">
-            <div className="flex items-center justify-between rounded border border-slate-800 bg-slate-900 px-3 py-2 text-xs"><span className="text-slate-400">Authenticator protection</span><span className={mfa.data?.enabled ? "text-gain" : "text-slate-500"}>{mfa.data?.enabled ? "enabled" : "not enabled"}</span></div>
-            {!mfa.data?.enabled && !mfaSetup && <Button className="w-full" onClick={() => setupMfa.mutate()} disabled={setupMfa.isPending}>{setupMfa.isPending ? "Preparing…" : "Set up authenticator"}</Button>}
+            <div className="flex items-center justify-between rounded border border-slate-800 bg-slate-900 px-3 py-2 text-xs"><span className="text-slate-400">Authenticator protection</span><span className={totpEnabled ? "text-gain" : "text-slate-500"}>{totpEnabled ? "enabled" : "not enabled"}</span></div>
+            {!totpEnabled && !mfaSetup && <Button className="w-full" onClick={() => setupMfa.mutate()} disabled={setupMfa.isPending}>{setupMfa.isPending ? "Preparing…" : "Set up authenticator"}</Button>}
             {mfaSetup && <div className="space-y-3 rounded border border-accent/25 bg-accent/5 p-3">
               <p className="text-xs leading-5 text-slate-300">Add this account to your authenticator using the setup key or provisioning URI. The key is shown only during this setup.</p>
               <div><div className="text-[10px] uppercase tracking-wider text-slate-500">Setup key</div><code className="mt-1 block break-all text-sm text-accent">{mfaSetup.secret}</code></div>
@@ -96,7 +98,7 @@ export default function AccountPage() {
               <div className="mt-3 grid grid-cols-2 gap-1 font-mono text-xs text-slate-200">{recoveryCodes.map((code) => <span key={code}>{code}</span>)}</div>
               <Button variant="ghost" className="mt-3 w-full" onClick={() => setRecoveryCodes([])}>I have stored these codes</Button>
             </div>}
-            {mfa.data?.enabled && <div className="space-y-3">
+            {totpEnabled && mfa.data && <div className="space-y-3">
               <p className="text-xs leading-5 text-slate-500">{mfa.data.recovery_codes_remaining} unused recovery code(s) remain. Enter a current authenticator or unused recovery code to rotate codes or disable protection.</p>
               <label htmlFor="mfa-current-code" className="block text-xs text-slate-300">Current second factor</label>
               <Input id="mfa-current-code" value={mfaCode} onChange={(event) => setMfaCode(event.target.value)} autoComplete="one-time-code" placeholder="123456 or XXXX-XXXX" />
@@ -104,6 +106,7 @@ export default function AccountPage() {
               <div className="grid gap-2 sm:grid-cols-2"><Button variant="ghost" disabled={mfaCode.trim().length < 6 || regenerateCodes.isPending} onClick={() => regenerateCodes.mutate()}>Rotate recovery codes</Button><Button variant="ghost" className="text-loss border-loss/25" disabled={mfaCode.trim().length < 6 || disableMfa.isPending} onClick={() => disableMfa.mutate()}>Disable 2FA</Button></div>
             </div>}
           </CardContent></Card>
+          <PasskeyPanel />
         </div>
 
         <div className="space-y-4">

@@ -7,10 +7,156 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import json
+import math
 from typing import Any, Sequence
 
 import numpy as np
 import pandas as pd
+
+from forecasting.model_promotion import active_promotion_receipt, manifest_path
+from forecasting.promotion_store import canonical, connect_registry, registry_path, sign_payload, valid_signature
+
+
+def _read_control(connection: Any, key: str) -> dict[str, Any]:
+    row = connection.execute("SELECT payload_json FROM model_controls WHERE key=?", (key,)).fetchone()
+    if row is None:
+        return {}
+    value = json.loads(row[0])
+    if not isinstance(value, dict) or not valid_signature(value) or value.get("key") != key:
+        raise RuntimeError("Tier control integrity failed")
+    return value
+
+
+def _save_control(connection: Any, key: str, state: dict[str, Any]) -> None:
+    state = sign_payload({**state, "key": key, "updated_at": datetime.now(timezone.utc).isoformat()})
+    text = canonical(state)
+    connection.execute("INSERT INTO model_controls VALUES(?,?) ON CONFLICT(key) DO UPDATE SET payload_json=excluded.payload_json", (key, text))
+    connection.execute("INSERT INTO model_control_events(payload_json) VALUES(?)", (text,))
+
+
+def tier_controls() -> list[dict[str, Any]]:
+    """Verified persistent controls; integrity failures must block publication."""
+    if not registry_path(manifest_path()).exists():
+        return []
+    conn = connect_registry(manifest_path())
+    try:
+        return [_read_control(conn, row[0]) for row in conn.execute("SELECT key FROM model_controls").fetchall()]
+    finally:
+        conn.close()
+
+
+def set_tier_pause(tier: str, *, paused: bool, actor: str, reason: str) -> None:
+    if tier not in {"T0", "T1", "T2", "T3", "T4"} or not actor.strip() or len(reason.strip()) < 12:
+        raise ValueError("A valid tier, actor and justification of at least 12 characters are required")
+    conn = connect_registry(manifest_path())
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        _save_control(conn, f"pause:{tier}", {"tier": tier, "paused": paused, "actor": actor[:120], "reason": reason[:500]})
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def enforce_tier_decay(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Three disjoint 20-outcome windows below signed backtest coverage widen a tier.
+
+    Repeated scheduler calls on the same observations cannot advance the counter.
+    Rows must come from the authoritative automatic-settlement reader. Controls
+    are candidate/horizon/nominal-coverage specific and survive process restarts.
+    Widening is latched pending reviewed re-promotion; it never claims calibration.
+    """
+    receipt = active_promotion_receipt()
+    if not receipt or not receipt.get("tier_validation"):
+        return []
+    groups: dict[tuple[str, int, float], dict[int, dict[str, Any]]] = {}
+    seen = set()
+    for row in sorted(rows, key=lambda item: int(item.get("id", 0))):
+        try:
+            payload = json.loads(row.get("payload_json") or "{}")
+            tier = str(payload.get("tier") or (payload.get("data_sufficiency") or {}).get("tier") or "unknown")
+            nominal = float(row["confidence_level"])
+            if payload.get("promotion_artifact") != receipt["artifact_hash"]:
+                continue
+            if tier not in receipt["tier_validation"] or abs(nominal - receipt["target_coverage"]) > 1e-6:
+                continue
+            if row["coverage_hit"] not in (0, 1, False, True):
+                continue
+            identity = (row["symbol"], row["target_timestamp"], row["timeframe"], int(row["horizon_sessions"]), nominal)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            groups.setdefault((tier, int(row["horizon_sessions"]), nominal), {})[int(row["id"])] = row
+        except (ValueError, TypeError, KeyError, AttributeError):
+            continue
+    updated = []
+    conn = connect_registry(manifest_path())
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        for (tier, horizon, nominal), observations in groups.items():
+            key = f"decay:{receipt['artifact_hash']}:{tier}:{horizon}:{nominal}"
+            state = _read_control(conn, key)
+            fresh = sorted(n for n in observations if n > state.get("last_id", 0))
+            while len(fresh) >= 20:
+                window, fresh = fresh[:20], fresh[20:]
+                coverage = sum(int(observations[n]["coverage_hit"]) for n in window) / 20
+                expected = float(receipt["tier_validation"][tier]["coverage"])
+                streak = int(state.get("bad_windows", 0)) + 1 if coverage < expected - .10 else 0
+                factor = max(float(state.get("widen_factor", 1)), 1.5 if streak >= 3 else 1)
+                state = {"tier": tier, "horizon": horizon, "nominal": nominal,
+                         "artifact_hash": receipt["artifact_hash"], "last_id": window[-1],
+                         "bad_windows": streak, "coverage": coverage, "expected_coverage": expected,
+                         "widen_factor": factor, "action": "widen" if factor > 1 else "monitor",
+                         "actor": "automatic-live-decay", "reason": "Disjoint authoritative settlement windows"}
+                _save_control(conn, key, state)
+                updated.append(state)
+        conn.commit()
+    finally:
+        conn.close()
+    return updated
+
+
+def apply_tier_controls(payload: dict[str, Any]) -> dict[str, Any]:
+    """Final shared publication boundary for pauses and sustained widening."""
+    tier = payload.get("tier") or (payload.get("data_sufficiency") or {}).get("tier")
+    try:
+        controls = tier_controls()
+        receipt = active_promotion_receipt()
+        payload["promotion_artifact"] = (receipt or {}).get("artifact_hash")
+        paused = any(c.get("tier") == tier and c.get("paused") for c in controls)
+    except Exception:
+        controls, receipt, paused = [], None, True
+        payload["live_control"] = {"action": "pause", "reason": "Control integrity unavailable"}
+    entries = [(payload, int((payload.get("horizon") or {}).get("sessions", 1))),
+               *((entry, int(entry["sessions"])) for entry in (payload.get("multi_horizon") or {}).get("horizons", []))]
+    for entry, horizon in entries:
+        if paused:
+            entry.update(forecast=None, abstained=True, model_supported=False, forecast_status="abstained",
+                         support_state="abstained", abstention_reason="Forecasting paused by operational controls.")
+            continue
+        forecast = entry.get("forecast")
+        if not forecast:
+            continue
+        applicable = [c for c in controls if c.get("tier") == tier and c.get("horizon") == horizon
+                      and c.get("artifact_hash") == (receipt or {}).get("artifact_hash")
+                      and c.get("nominal") == forecast.get("confidence_level")]
+        factor = max([float(c.get("widen_factor", 1)) for c in applicable] or [1.])
+        if not math.isfinite(factor) or factor < 1:
+            raise RuntimeError("Invalid tier widening factor")
+        if factor > 1:
+            previous_factor = float((entry.get("live_control") or {}).get("factor", 1))
+            if not math.isfinite(previous_factor) or previous_factor < 1:
+                raise RuntimeError("Invalid previously applied widening factor")
+            ratio = max(1., factor / previous_factor)
+            median = float(forecast["median"])
+            forecast["low"] = round(median - (median - float(forecast["low"])) * ratio, 2)
+            forecast["high"] = round(median + (float(forecast["high"]) - median) * ratio, 2)
+            entry["live_control"] = {"action": "widen", "factor": max(factor, previous_factor),
+                                     "reason": "Sustained live undercoverage; adjusted coverage not yet verified"}
+            entry["width_pct"] = (forecast["high"] - forecast["low"]) / median * 100 if median else None
+    if paused:
+        payload.setdefault("live_control", {"action": "pause", "reason": "Operator tier pause"})
+    return payload
 
 
 @dataclass(frozen=True, slots=True)

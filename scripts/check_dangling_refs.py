@@ -102,6 +102,18 @@ def main() -> int:
     return 0
 
 
+def _module_scope_nodes(tree: ast.AST) -> list[ast.AST]:
+    """Conditional exports count; function/class-local bindings do not."""
+    pending = [tree]
+    declarations = []
+    while pending:
+        node = pending.pop()
+        declarations.append(node)
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            pending.extend(ast.iter_child_nodes(node))
+    return declarations
+
+
 def check_source_imports(root: Path | None = None) -> list[str]:
     """Validate project-local absolute/relative imports without executing modules.
 
@@ -116,6 +128,18 @@ def check_source_imports(root: Path | None = None) -> list[str]:
         sources.extend(Path(directory) / name for name in files if name.endswith(".py"))
     local_roots = {path.stem for path in root.glob("*.py")}
     local_roots.update(path.name for path in root.iterdir() if path.is_dir() and ((path / "__init__.py").is_file() or path.name == "scripts"))
+    inventory = root / "release-allowlist.txt"
+    if inventory.is_file():
+        # A flattened ZIP can lose the WHOLE directory, including __init__.py.
+        # Retain the expected roots independently of what survived extraction.
+        for entry in inventory.read_text(encoding="utf-8-sig").splitlines():
+            entry = entry.strip()
+            if entry and not entry.startswith("#") and "/" in entry:
+                top = entry.split("/")[0]
+                # alembic/ is a migration workspace, not the installed Alembic
+                # package. Its imports are validated by the dependency gate.
+                if top.isidentifier() and top != "alembic":
+                    local_roots.add(top)
     errors = []
     symbol_cache: dict[Path, tuple[set[str], bool]] = {}
     for source in sources:
@@ -156,7 +180,7 @@ def check_source_imports(root: Path | None = None) -> list[str]:
                     names: set[str] = set()
                     dynamic = False
                     parsed = ast.parse(module_file.read_text(encoding="utf-8-sig"))
-                    for declaration in ast.walk(parsed):
+                    for declaration in _module_scope_nodes(parsed):
                         if isinstance(declaration, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                             names.add(declaration.name)
                             dynamic |= declaration.name == "__getattr__"

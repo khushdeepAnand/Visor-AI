@@ -22,6 +22,7 @@ from forecasting.promotion_gate import (
 
 class MockDMResult:
     """Mock Diebold-Mariano result."""
+    dm_statistic = -3.0
     def __init__(self, reject_null: bool, p_value: float):
         self.reject_null = reject_null
         self.p_value = p_value
@@ -146,6 +147,7 @@ def test_run_promotion_gate_all_pass():
     from forecasting.promotion_gate import run_promotion_gate
 
     class MockDMResult:
+        dm_statistic = -3.0
         def __init__(self):
             self.reject_null = True
             self.p_value = 0.01
@@ -177,6 +179,7 @@ def test_run_promotion_gate_fail_coverage():
     from forecasting.promotion_gate import run_promotion_gate
 
     class MockDMResult:
+        dm_statistic = -3.0
         def __init__(self):
             self.reject_null = True
             self.p_value = 0.01
@@ -203,6 +206,7 @@ def test_run_promotion_gate_fail_mase():
     from forecasting.promotion_gate import run_promotion_gate
 
     class MockDMResult:
+        dm_statistic = -3.0
         def __init__(self):
             self.reject_null = True
             self.p_value = 0.01
@@ -260,6 +264,7 @@ def test_run_all_tier_gates():
                 setattr(self, k, v)
 
     class MockDMResult:
+        dm_statistic = -3.0
         def __init__(self):
             self.reject_null = True
             self.p_value = 0.01

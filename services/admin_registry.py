@@ -104,6 +104,43 @@ def is_admin_email(email: str) -> bool:
         return False
 
 
+OPERATIONAL_ROLES = {"support-ops": "STOCKPILOT_SUPPORT_OPS_EMAILS", "model-ops": "STOCKPILOT_MODEL_OPS_EMAILS"}
+
+
+def effective_role(user: dict[str, Any]) -> str:
+    """Stored role and current deployment allowlist must both authorize access."""
+    role, email = str(user.get("role", "user")), _normalize(str(user.get("email", "")))
+    if role == "admin":
+        return role if is_admin_email(email) else "user"
+    variable = OPERATIONAL_ROLES.get(role)
+    if variable and email and email in {_normalize(item) for item in os.getenv(variable, "").replace(";", ",").split(",")}:
+        return role
+    return "user"
+
+
+def bootstrap_operational_roles() -> dict[str, Any]:
+    """Assign configured operational accounts; registration cannot choose roles."""
+    assignments: dict[str, str] = {}
+    for role, variable in OPERATIONAL_ROLES.items():
+        for entry in os.getenv(variable, "").replace(";", ",").split(","):
+            email = _normalize(entry)
+            if not email:
+                continue
+            if "@" not in email or email in assignments:
+                raise AdminConfigurationError("Operational identities must be valid and belong to only one role")
+            assignments[email] = role
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("UPDATE users SET role='user' WHERE role IN ('support-ops','model-ops')")
+        for email, role in assignments.items():
+            conn.execute("UPDATE users SET role=? WHERE LOWER(email)=? AND role!='admin'", (role, email))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"configured": len(assignments)}
+
+
 def record_admin_action(
     *,
     actor_id: int | None,
@@ -153,6 +190,53 @@ def record_admin_action(
         pass
     finally:
         connection.close()
+
+
+def apply_account_actions(user_ids: list[int], action: str, *, actor_id: int,
+                          actor_email: str, reason: str) -> dict[str, Any]:
+    """Apply a bounded batch and its audit records in one transaction."""
+    ids = sorted(set(user_ids))
+    if not ids or len(ids) > 100 or any(type(uid) is not int or uid <= 0 for uid in ids):
+        raise ValueError("Select between 1 and 100 valid accounts")
+    if action not in {"suspend", "reinstate", "force_logout", "reset_lockout", "force_mfa_reset"}:
+        raise ValueError("Unknown account action")
+    reason = reason.strip()
+    if not 12 <= len(reason) <= 160:
+        raise ValueError("An explicit justification of 12–160 characters is required")
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        accounts = []
+        for uid in ids:
+            row = conn.execute("SELECT email FROM users WHERE id=?", (uid,)).fetchone()
+            if row is None:
+                raise ValueError("An account was not found; no accounts changed")
+            accounts.append((uid, row[0]))
+        for uid, email in accounts:
+            if action in {"suspend", "force_logout", "force_mfa_reset"}:
+                conn.execute("UPDATE users SET token_version=token_version+1 WHERE id=?", (uid,))
+                conn.execute("UPDATE auth_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE user_id=? AND revoked_at IS NULL", (uid,))
+                conn.execute("UPDATE mfa_challenges SET consumed_at=CURRENT_TIMESTAMP WHERE user_id=? AND consumed_at IS NULL", (uid,))
+            if action == "suspend":
+                conn.execute("UPDATE users SET account_status='suspended' WHERE id=?", (uid,))
+            elif action == "reinstate":
+                conn.execute("UPDATE users SET account_status='active' WHERE id=?", (uid,))
+            elif action == "reset_lockout":
+                conn.execute("DELETE FROM auth_login_attempts WHERE identifier=LOWER(?)", (email,))
+            elif action == "force_mfa_reset":
+                conn.execute("DELETE FROM user_mfa WHERE user_id=?", (uid,))
+                conn.execute("DELETE FROM mfa_recovery_codes WHERE user_id=?", (uid,))
+                if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='webauthn_credentials'").fetchone():
+                    conn.execute("DELETE FROM webauthn_credentials WHERE user_id=?", (uid,))
+            conn.execute("""INSERT INTO admin_audit_log(actor_user_id,actor_email,action,target,outcome,detail)
+                VALUES(?,?,?,?,?,?)""", (actor_id, _normalize(actor_email), f"account:{action}", f"user:{uid}", "ok", json.dumps({"reason": reason})))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {"updated": True, "action": action, "user_ids": ids}
 
 
 def admin_audit_events(limit: int = 100) -> list[dict[str, Any]]:

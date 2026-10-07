@@ -44,6 +44,22 @@ class ApiMetrics:
                 "requests_by_path": dict(sorted(self._by_path.items())),
             }
 
+    def prometheus(self) -> str:
+        """Prometheus counters/summary using observed requests, without PII labels."""
+        with self._lock:
+            return (
+                "# HELP stockpilot_http_requests_total Observed API requests.\n"
+                "# TYPE stockpilot_http_requests_total counter\n"
+                f"stockpilot_http_requests_total {self._request_count}\n"
+                "# HELP stockpilot_http_errors_total Observed HTTP errors (status >= 400).\n"
+                "# TYPE stockpilot_http_errors_total counter\n"
+                f"stockpilot_http_errors_total {self._error_count}\n"
+                "# HELP stockpilot_http_request_duration_seconds Observed request duration.\n"
+                "# TYPE stockpilot_http_request_duration_seconds summary\n"
+                f"stockpilot_http_request_duration_seconds_sum {self._latency_total_ms / 1000:g}\n"
+                f"stockpilot_http_request_duration_seconds_count {self._request_count}\n"
+            )
+
 
 class SlidingWindowRateLimiter:
     def __init__(self) -> None:

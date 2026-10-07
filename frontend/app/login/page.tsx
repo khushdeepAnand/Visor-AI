@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Eye, EyeOff } from "lucide-react";
 import { OAuthButtons } from "@/components/OAuthButtons";
+import { verifyPasskey } from "@/lib/passkeys";
 
 function LoginContent() {
   const [error, setError] = useState("");
@@ -78,6 +79,16 @@ function LoginContent() {
     }
   }
 
+  async function passkeyLogin() {
+    setError(""); setPending(true);
+    try {
+      const result = await verifyPasskey();
+      await refresh();
+      router.replace(safeNextPath(result.next || next));
+    } catch (err) { setError((err as Error).message); }
+    finally { setPending(false); }
+  }
+
   return (
     <main className="grid min-h-screen place-items-center p-4 terminal-grid">
       <form method="post" onSubmit={submit} className="w-full max-w-md rounded-xl border border-slate-800 bg-terminal-900 p-6 shadow-2xl">
@@ -89,6 +100,7 @@ function LoginContent() {
         {!mfaRequired && <><OAuthButtons nextPath={next} /><div className="my-5 flex items-center gap-3 text-[10px] uppercase tracking-wider text-slate-600"><span className="h-px flex-1 bg-slate-800"/>or use password<span className="h-px flex-1 bg-slate-800"/></div></>}
         <div className="space-y-3">
           {mfaRequired ? <>
+            <Button className="w-full" type="button" disabled={!ready || pending} onClick={passkeyLogin}>Verify with passkey</Button>
             <label htmlFor="login-code" className="block text-xs text-slate-300">Authenticator or recovery code</label>
             <Input id="login-code" name="code" inputMode="text" autoComplete="one-time-code" placeholder="123456 or XXXX-XXXX" aria-describedby={error ? "login-error" : undefined} autoFocus required />
           </> : <>

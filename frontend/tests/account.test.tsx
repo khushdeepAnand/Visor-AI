@@ -32,7 +32,10 @@ vi.mock("@tanstack/react-query", async () => {
   const actual = await vi.importActual<typeof import("@tanstack/react-query")>("@tanstack/react-query");
   return {
     ...actual,
-    useQuery: () => ({ data: { google: { configured: true } }, isLoading: false, isError: false }),
+    useQuery: ({ queryKey }: { queryKey: string[] }) => ({ data:
+      queryKey[0] === "passkeys" ? { available: true, credentials: [] } :
+      queryKey[0] === "mfa-status" ? { enabled: false, totp_enabled: false, recovery_codes_remaining: 0 } :
+      queryKey[0] === "sessions" ? { items: [] } : { google: { configured: true } }, isLoading: false, isError: false }),
     useMutation: (opts: any) => ({ mutate: async () => { await opts.mutationFn(); }, isPending: false }),
     useQueryClient: () => ({ invalidateQueries: vi.fn(), removeQueries: vi.fn(), clear: vi.fn(), setQueryData: vi.fn() }),
   };

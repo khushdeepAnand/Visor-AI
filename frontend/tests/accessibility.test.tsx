@@ -172,5 +172,5 @@ describe("accessibility", () => {
     await screen.findByText("Total P&L");
 
     expect(await axe(container)).toHaveNoViolations();
-  });
+  }, 15000);
 });

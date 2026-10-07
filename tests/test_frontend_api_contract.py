@@ -16,7 +16,9 @@ FRONTEND_SOURCES = (ROOT / "frontend" / "app", ROOT / "frontend" / "components",
 HTTP_METHODS = {"get", "post", "put", "patch", "delete", "options", "head"}
 PATH_PATTERN = re.compile(r"/api/v1/[A-Za-z0-9_./{}$()\-]+")
 METHOD_PATTERN = re.compile(r"method\s*:\s*[\"'](GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)[\"']", re.I)
-EXPECTED_PATH_METHOD_SHA256 = "fa77b3c5ee9bfa63c444b83eea488bb5cd5189b0ef20a0f0b764aaa1ec5a7596"
+# Reviewed additions: bulk accounts, compliance read/update and queue
+# read/trigger/replay, alongside the prior model/role/metrics routes.
+EXPECTED_PATH_METHOD_SHA256 = "3220690e31298d92cafd8751f44dfbfca3e8b5592f893243e9bbdab0388b864a"
 
 
 def _operations(schema: dict[str, Any]) -> dict[str, set[str]]:

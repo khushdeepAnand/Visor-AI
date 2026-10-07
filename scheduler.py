@@ -266,73 +266,31 @@ def enforce_scheduled_retention() -> None:
 
 
 def compute_live_decay_for_all() -> None:
-    """Compute live decay for all configured symbols and persist results."""
+    """Enforce sustained tier decay using authoritative automatic settlements."""
     from database import get_settled_rows_for_quality
-    from forecasting.drift_monitor import quality_dashboard
-    from forecasting.data_tier_router import assign_tier
-    
+    from forecasting.live_decay import enforce_tier_decay
     try:
-        dashboard = quality_dashboard(get_settled_rows_for_quality())
+        actions = enforce_tier_decay(get_settled_rows_for_quality(limit=10000))
+        LOGGER.info("Tier live-decay windows processed: %d", len(actions))
     except Exception:
-        LOGGER.exception("Live decay: failed to get quality dashboard")
-        return
-    
-    window = os.getenv("STOCKPILOT_RETRAIN_WINDOW", "1y").strip()
-    if window not in WINDOW_TIMEFRAME_DEFAULTS:
-        window = "1y"
-    timeframe = os.getenv("STOCKPILOT_RETRAIN_TIMEFRAME", WINDOW_TIMEFRAME_DEFAULTS[window]).strip()
-    
-    for group in dashboard["groups"]:
-        symbol = str(group.get("symbol") or "").strip().upper()
-        horizon = int(group.get("horizon") or 1)
-        tier = group.get("tier") or "T3"
-        try:
-            # Get live data (recent settled forecasts)
-            conn = get_connection()
-            live_rows = conn.execute(
-                """SELECT actual_price as actual, forecast_low as low, forecast_high as high
-                   FROM settled_forecasts
-                   WHERE symbol = ? AND horizon_sessions = ?
-                   ORDER BY settled_at DESC LIMIT 100""",
-                (symbol, horizon)
-            ).fetchall()
-            conn.close()
-            
-            if len(live_rows) < 20:
-                continue
-            
-            live_data = pd.DataFrame([dict(r) for r in live_rows])
-            
-            # Get backtest data (from quality dashboard)
-            backtest_rows = group.get("backtest_forecasts", [])
-            if not backtest_rows or len(backtest_rows) < 20:
-                continue
-            backtest_data = pd.DataFrame(backtest_rows)
-            
-            # Build decay status
-            status = build_symbol_decay_status(symbol, tier, live_data, backtest_data)
-            
-            # Persist decay status
-            conn = get_connection()
-            conn.execute(
-                """INSERT OR REPLACE INTO model_decay
-                   (symbol, tier, horizon, overall_status, live_coverage, backtest_coverage,
-                    auto_widened, widen_factor, signals, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    symbol, tier, horizon, status.overall_status,
-                    status.live_coverage, status.backtest_coverage,
-                    status.auto_widened, status.widen_factor,
-                    json.dumps([s.__dict__ for s in status.signals], default=str),
-                    datetime.now(timezone.utc).isoformat()
-                )
-            )
-            conn.commit()
-            conn.close()
-            
-            LOGGER.info("Live decay computed for %s (h=%s): %s", symbol, horizon, status.overall_status)
-        except Exception:
-            LOGGER.exception("Live decay computation failed for %s", symbol)
+        LOGGER.exception("Tier live-decay enforcement failed")
+
+
+def backup_databases() -> None:
+    """Scheduled encrypted backups include the signed promotion/control sidecar."""
+    import database
+    from forecasting.model_promotion import manifest_path
+    from forecasting.promotion_store import registry_path
+    from services.encrypted_storage import backup_and_rehearse
+    key = database._get_encryption_key()
+    sources = [Path(database.DATABASE)]
+    registry = registry_path(manifest_path())
+    if registry.exists():
+        sources.append(registry)
+    result = backup_and_rehearse(sources, Path(os.getenv("STOCKPILOT_BACKUP_DIR", str(ROOT / "backups"))),
+                                os.getenv("STOCKPILOT_BACKUP_SECRET", ""),
+                                database_key=key.decode() if key else None)
+    LOGGER.info("Encrypted backup/restore drills complete: %d databases", len(result["backups"]))
 
 
 def reconcile_challenger() -> None:
@@ -421,6 +379,8 @@ def create_retention_scheduler() -> Any:
         max_instances=1,
         misfire_grace_time=3600,
     )
+    scheduler.add_job(backup_databases, "cron", hour=2, minute=15, id="stockpilot-encrypted-backups",
+                      replace_existing=True, coalesce=True, max_instances=1)
     return scheduler
 
 

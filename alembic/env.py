@@ -11,11 +11,7 @@ from alembic import context
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Import the database module to get the DSN
-try:
-    from services.db.factory import create_dao_factory
-except ImportError:
-    pass
+from services.db.configuration import migration_url
 
 # This is the Alembic Config object
 config = context.config
@@ -31,12 +27,8 @@ target_metadata = None
 # Get database URL from environment
 def get_database_url() -> str:
     """Get database URL from environment or config."""
-    import os
-    url = os.getenv("STOCKPILOT_DATABASE_URL")
-    if url:
-        return url
-    # Fallback to SQLite
-    return "sqlite:///stockpilot.db"
+    return migration_url(configured_url=config.get_main_option("sqlalchemy.url"),
+                         sqlite_fallback="sqlite:///stockpilot.db")
 
 
 def run_migrations_offline() -> None:

@@ -1,5 +1,18 @@
 # Architecture
 
+## v18 operational continuation (2026-10-07)
+
+- `/operations` → account directory/bulk API → existing users, MFA/session and
+  admin-audit tables. Batch state/audit changes share one SQLite transaction.
+- Compliance UI → allowlisted review API → existing app_settings and audit
+  storage; versioned user acknowledgments remain until account erasure.
+- Queue UI → sanitized operations API → existing Celery/Redis submission and
+  dead-letter services; configured schedules do not imply observed worker health.
+- Browser authenticator → WebAuthn registration/assertion API → credential
+  signature verification → single-use pending MFA challenge → authenticated session.
+- Cached forecast/comparison result → signed tier-control recheck → idempotent
+  widening or abstention → public range with honest calibration wording.
+
 ## Scope
 
 StockPilot AI v7.0 RC is a local-first Windows research and paper-trading application for NSE/BSE instruments. The supported release path is a single workstation process pair bound to loopback. Docker, Redis, and multi-worker capabilities exist in the repository but are not required by the Windows quick start.
@@ -121,3 +134,20 @@ No environment template contains a private credential. Windows setup generates i
 - External checks not verified: real Upstox and other third-party connectivity, real broker streaming, SMTP, Google OAuth, Sentry, Redis deployment, and scheduler integrations.
 - Release archive work: Phase 9 final ZIP construction, archive scans, inventory, path-safe extraction, and selected extracted-copy verification passed.
 - Future work: complete real-provider diagnostics when suitable user-owned credentials and external infrastructure are available.
+# v18 continuation flows — 2026-10-05
+
+The existing forecast engine remains the implementation. Signed model decisions
+use the SQLCipher-aware sidecar registry; manifest export occurs inside the
+serialized decision transaction. Persistent signed tier controls are consumed by
+the final primary/multi-horizon publication boundary. The cache key includes the
+current promotion receipt and controls, so operational changes do not reuse an
+old cached result. The decay scheduler consumes authoritative automatic outcomes,
+matching artifact and nominal coverage against signed backtest evidence.
+
+`/operations` uses separate support and model authorization dependencies. Scheduled
+backup tasks snapshot the main database and registry, authenticate/restoration-test
+the snapshots, then apply bounded retention. Celery-enabled submissions fail
+closed when broker/worker integration is unavailable. `/metrics` exposes aggregate
+Prometheus text counters; the optional monitoring Compose overlay provisions
+Prometheus and a Grafana datasource. The existing OTEL instrumentation remains;
+full dashboard/deployment evidence is still outstanding.

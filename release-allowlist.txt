@@ -21,6 +21,7 @@ ROLLBACK_RUNBOOK.md
 REGULATORY_REVIEW_REQUIRED.md
 UPGRADE_VERIFICATION.md
 V18_IMPLEMENTATION_STATUS.md
+CONTINUATION_PROMPT.md
 REFERENCE_RECONCILIATION.md
 SECURITY.md
 SECURITY_GOVERNANCE.md
@@ -72,6 +73,8 @@ Dockerfile
 Dockerfile.api
 docker-compose.yml
 docker-compose.staging.yml
+docker-compose.monitoring.yml
+docs/monitoring/**
 pyproject.toml
 pytest.ini
 mypy.ini

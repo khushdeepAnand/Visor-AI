@@ -9,7 +9,8 @@ import hmac
 import os
 import re
 import secrets
-import sqlite3
+import database
+from database import DATABASE_ERRORS, INTEGRITY_ERRORS, OPERATIONAL_ERRORS
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -28,7 +29,8 @@ except ImportError:  # Standard-library scrypt remains available offline.
 
 BASE_DIR = Path(__file__).resolve().parent
 
-DATABASE_PATH = BASE_DIR / "database" / "stockpilot.db"
+DATABASE_PATH = Path(database.DATABASE)
+
 
 
 # ==========================================================
@@ -65,21 +67,7 @@ def get_connection():
     Create and return a connection to the StockPilot database.
     """
 
-    DATABASE_PATH.parent.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    connection = sqlite3.connect(
-        DATABASE_PATH,
-        timeout=30
-    )
-
-    connection.execute("PRAGMA foreign_keys = ON")
-    connection.execute("PRAGMA journal_mode = WAL")
-    connection.execute("PRAGMA busy_timeout = 30000")
-
-    return connection
+    return database._open_connection(DATABASE_PATH)
 
 
 # ==========================================================
@@ -463,7 +451,7 @@ def register_user(
                 )
             )
 
-        except sqlite3.OperationalError:
+        except OPERATIONAL_ERRORS:
             pass
 
         connection.commit()
@@ -473,7 +461,7 @@ def register_user(
             "Registration successful. You can now log in."
         )
 
-    except sqlite3.IntegrityError:
+    except INTEGRITY_ERRORS:
         if connection is not None:
             connection.rollback()
 
@@ -482,7 +470,7 @@ def register_user(
             "An account with this email already exists."
         )
 
-    except sqlite3.Error:
+    except DATABASE_ERRORS:
         if connection is not None:
             connection.rollback()
 
@@ -645,7 +633,7 @@ def login_user(email, password):
         connection.commit()
         return True, {"id": user[0], "name": user[1], "email": user[2]}
 
-    except sqlite3.Error:
+    except DATABASE_ERRORS:
         if connection is not None:
             connection.rollback()
         return False, "Unable to access your account. Please try again."
@@ -694,7 +682,7 @@ def issue_password_reset_token(email):
         )
         connection.commit()
         return raw_token
-    except sqlite3.Error:
+    except DATABASE_ERRORS:
         if connection is not None:
             connection.rollback()
         return None
@@ -759,7 +747,7 @@ def reset_password(token, new_password):
         )
         connection.commit()
         return True, "Password updated successfully. You can now sign in."
-    except sqlite3.Error:
+    except DATABASE_ERRORS:
         if connection is not None:
             connection.rollback()
         return False, "Password reset could not be completed. Please try again."
@@ -818,7 +806,7 @@ def get_user_by_id(user_id):
                     (user_id,),
                 ).fetchall()
             ]
-        except sqlite3.OperationalError:
+        except OPERATIONAL_ERRORS:
             providers = [part for part in str(user[5] or "").split("+") if part in {"google", "apple"}]
         try:
             mfa_row = cursor.execute(
@@ -826,7 +814,7 @@ def get_user_by_id(user_id):
                 (user_id,),
             ).fetchone()
             mfa_enabled = bool(mfa_row and mfa_row[0])
-        except sqlite3.OperationalError:
+        except OPERATIONAL_ERRORS:
             mfa_enabled = False
         return {
             "id": user[0],
@@ -841,7 +829,7 @@ def get_user_by_id(user_id):
             "mfa_enabled": mfa_enabled,
         }
 
-    except sqlite3.Error:
+    except DATABASE_ERRORS:
         return None
 
     finally:
@@ -942,7 +930,7 @@ def login_or_register_oauth_user(
                     "INSERT OR IGNORE INTO settings(user_id,theme,currency,default_period) VALUES(?,'Dark','₹','1y')",
                     (user_id,),
                 )
-            except sqlite3.OperationalError:
+            except OPERATIONAL_ERRORS:
                 pass
 
         user_id = int(user[0])
@@ -981,11 +969,11 @@ def login_or_register_oauth_user(
         return True, {
             "id": user_id, "name": user[1], "email": user[2], "role": str(user[6] or "user"),
         }, action
-    except sqlite3.IntegrityError:
+    except INTEGRITY_ERRORS:
         if connection is not None:
             connection.rollback()
         return False, "This provider identity could not be linked safely.", "error"
-    except sqlite3.Error:
+    except DATABASE_ERRORS:
         if connection is not None:
             connection.rollback()
         return False, "External sign-in could not access the user account.", "error"

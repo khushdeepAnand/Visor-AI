@@ -112,6 +112,8 @@ jobs:
           pip install -r requirements-dev.txt
       - name: mypy
         run: python -m mypy --config-file mypy.ini .
+      - name: SQLite/Postgres DAO signature parity (no connections)
+        run: python scripts/verify_backend_parity.py
       - name: pip-audit
         run: python -m pip_audit --local
       - name: Bandit (generic backend SAST, fail on Medium+)
@@ -160,6 +162,9 @@ jobs:
       - name: Generated API client drift check
         working-directory: frontend
         run: npm run check:api
+      - name: Forecast rendering honesty
+        working-directory: frontend
+        run: npm run check:forecast-honesty
       - name: Typecheck
         working-directory: frontend
         run: npm run typecheck
@@ -172,6 +177,9 @@ jobs:
       - name: npm production audit
         working-directory: frontend
         run: npm run audit:prod
+      - name: npm development and build-tool audit
+        working-directory: frontend
+        run: npm run audit
       - name: Browser lifecycle and accessibility tests
         working-directory: frontend
         run: npm run test:e2e

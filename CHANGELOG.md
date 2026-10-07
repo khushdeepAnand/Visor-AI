@@ -1,5 +1,27 @@
 # Changelog
 
+## v18 local continuation — 2026-10-07
+
+- Fixed actual MFA-backed directory queries; added account-age/anomaly filters and transactional/audited bulk account controls with explicit reason and step-up.
+- Added persistent compliance checklist/acknowledgment directory and sanitized queue operations; repaired Celery replay argument restoration.
+- Fixed cross-network travel detection, stale fingerprints and IPv6 prefixes; stopped trusting arbitrary forwarded headers.
+- Integrated real browser passkey enrollment/login and mandatory MFA for passkey-only accounts; repaired challenge cookies and logout cache clearing.
+- Rechecked signed controls at cached primary/comparison publication; made widening idempotent and unverified calibration explicit.
+- Isolated browser ports/build output; validated 20 browser tests against production build and disposable encrypted storage. Patched source-map dependency.
+- Strict backend: 1,098 passed/3 skipped; frontend: 192 unit tests. Full master-prompt completion remains unclaimed.
+
+## v18 local continuation — 2026-10-04 (master prompt still in progress)
+
+- Routed authentication through the SQLCipher-aware connection factory; handled both drivers' DB-API exceptions and row types in authentication, DAO reads and forecast-history reads.
+- Isolated browser tests in disposable encrypted databases with independent test credentials; refused reuse of personal API/frontend servers.
+- Strengthened import validation against release-inventory package roots, including entirely flattened packages; function-local names no longer count as module exports.
+- Made release ZIP replacement atomic after extracted validation, preserving the previous release when candidate verification fails.
+- Required finite, valid promotion metrics and a directional Diebold-Mariano statistic favouring the candidate. Empty tier evaluations no longer report a pass.
+- Excluded nonconverged base members from the evaluated ensemble while retaining the persistence baseline.
+- Migrated the CSS toolchain to Tailwind 4.3.3 and updated undici to remove development dependency vulnerabilities; retained semantic theme tokens and added browser checks for light/dark utility styles.
+- Added a full npm dependency audit to CI, alongside the production audit.
+- These changes do not establish market-data superiority or complete the remaining admin, infrastructure, UI and tooling requirements. See `V18_IMPLEMENTATION_STATUS.md`.
+
 ## StockPilot AI v12 Engineering Upgrade - 2026-09-27
 
 - Added opt-in RFC 6238 MFA for regular users with encrypted TOTP secrets, single-use recovery codes, replay protection, bounded challenges, OAuth enforcement, and per-session revocation.
@@ -227,3 +249,16 @@
 ### Maintenance
 - update changelog
 - fix gitleaks config - use .gitleaks.toml allowlist for path-based false positives
+# Local continuation — 2026-10-05
+
+- Hardened model promotion policy, aggregate evidence minimums, rollback revocation
+  checks and transactionally serialized manifest exports.
+- Added signed persistent tier-decay widening and tier pauses at forecast
+  publication, with cache invalidation and authoritative artifact-matched evidence.
+- Added least-privilege support/model operations roles and operational UI.
+- Added scheduled encrypted main/registry backup restore drills; configured queues
+  no longer silently execute inline when durable submission is unavailable.
+- Added accessible reduced-motion uncertainty fan, command-palette keyboard fixes,
+  diagnostic wording corrections and a forecast-honesty regression gate.
+- Added aggregate Prometheus metrics and a monitoring Compose overlay. Infrastructure
+  deployment and the full master requirements remain explicitly unfinished.

@@ -367,9 +367,10 @@ class ProviderOrderPayload(BaseModel):
 
 
 class AccountLifecyclePayload(BaseModel):
+    model_config = {"str_strip_whitespace": True}
     account_id: int = Field(gt=0)
-    action: Literal["suspend", "reinstate", "force_logout", "reset_lockout"]
-    reason: str = Field(default="operational_security", min_length=3, max_length=160)
+    action: Literal["suspend", "reinstate", "force_logout", "reset_lockout", "force_mfa_reset"]
+    reason: str = Field(min_length=12, max_length=160)
 
 
 class AlertTogglePayload(BaseModel):

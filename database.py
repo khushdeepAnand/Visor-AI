@@ -13,6 +13,18 @@ except ImportError:
     sqlcipher = None
     SQLCIPHER_AVAILABLE = False
 
+# Both drivers expose DB-API exceptions, but their class hierarchies are distinct.
+DATABASE_ERRORS = (sqlite3.Error,) + ((sqlcipher.Error,) if sqlcipher else ())
+INTEGRITY_ERRORS = (sqlite3.IntegrityError,) + ((sqlcipher.IntegrityError,) if sqlcipher else ())
+OPERATIONAL_ERRORS = (sqlite3.OperationalError,) + ((sqlcipher.OperationalError,) if sqlcipher else ())
+
+
+def database_row(cursor, values):
+    """Use the row type belonging to the cursor's actual DB-API driver."""
+    if isinstance(cursor, sqlite3.Cursor):
+        return sqlite3.Row(cursor, values)
+    return sqlcipher.Row(cursor, values)
+
 
 # ==========================================================
 # DATABASE CONFIGURATION
@@ -31,6 +43,10 @@ DATABASE = os.path.join(
     DATABASE_DIR,
     "stockpilot.db"
 )
+
+if os.getenv("STOCKPILOT_DATABASE_PATH"):
+    DATABASE = os.path.abspath(os.environ["STOCKPILOT_DATABASE_PATH"])
+    DATABASE_DIR = os.path.dirname(DATABASE)
 
 # SQLCipher encryption settings
 SQLCIPHER_KEY = os.getenv("STOCKPILOT_DB_ENCRYPTION_KEY")
@@ -57,10 +73,10 @@ def _get_encryption_key() -> Optional[bytes]:
     return None
 
 
-def _open_connection():
+def _open_connection(database_path=None):
     """Open a database connection with optional SQLCipher encryption."""
     os.makedirs(
-        DATABASE_DIR,
+        os.path.dirname(os.path.abspath(os.fspath(database_path) if database_path is not None else DATABASE)),
         exist_ok=True
     )
 
@@ -75,7 +91,7 @@ def _open_connection():
             )
         # Use SQLCipher for encrypted database
         conn = sqlcipher.connect(
-            DATABASE,
+            database_path if database_path is not None else DATABASE,
             timeout=30
         )
         
@@ -96,7 +112,7 @@ def _open_connection():
     else:
         # Standard SQLite connection
         conn = sqlite3.connect(
-            DATABASE,
+            database_path if database_path is not None else DATABASE,
             timeout=30
         )
 
@@ -1649,7 +1665,7 @@ def get_prediction_details(user_id, symbol=None, limit=50):
     """Return expanded JSON-aware prediction history for professional reporting."""
 
     conn = get_connection()
-    conn.row_factory = sqlite3.Row
+    conn.row_factory = database_row
     cursor = conn.cursor()
     params = [user_id]
     where = "WHERE user_id = ?"
@@ -2216,7 +2232,7 @@ def mark_range_forecast_unverifiable(prediction_id, *, reason, evidence=None):
 def get_pending_range_forecasts(limit=1000, user_id=None):
     """Return unsettled ledger rows for the automatic settlement worker."""
     conn = get_connection()
-    conn.row_factory = sqlite3.Row
+    conn.row_factory = database_row
     rows = conn.execute(
         """SELECT id,user_id,symbol,forecast_low,forecast_high,confidence_level,
                   training_window,timeframe,origin_timestamp,target_timestamp,snapshot_hash,

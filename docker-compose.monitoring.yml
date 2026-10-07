@@ -1,0 +1,22 @@
+services:
+  prometheus:
+    image: prom/prometheus:v3.7.3
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes:
+      - ./docs/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports: ["127.0.0.1:9090:9090"]
+    depends_on: [api]
+  grafana:
+    image: grafana/grafana:12.2.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${STOCKPILOT_GRAFANA_PASSWORD:?supply a Grafana admin password}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - ./docs/monitoring/grafana-datasource.yml:/etc/grafana/provisioning/datasources/stockpilot.yml:ro
+      - grafana_data:/var/lib/grafana
+    ports: ["127.0.0.1:3001:3000"]
+    depends_on: [prometheus]
+volumes:
+  prometheus_data:
+  grafana_data:

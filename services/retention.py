@@ -83,7 +83,7 @@ def enforce_database_retention(policy: RetentionPolicy, *, now: datetime | None 
         counts["audit_log"] = _delete_by_id(
             connection,
             "audit_log",
-            "datetime(created_at) < datetime(?)",
+            "datetime(created_at) < datetime(?) AND action != 'research_disclaimer_acknowledged'",
             (audit_cutoff,),
             policy.batch_size,
         )

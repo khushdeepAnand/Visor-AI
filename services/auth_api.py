@@ -272,6 +272,8 @@ def _new_recovery_codes() -> list[str]:
 
 
 def mfa_status(user_id: int) -> dict[str, Any]:
+    from services.webauthn import _ensure_table
+    _ensure_table()
     connection = get_connection()
     try:
         row = connection.execute(
@@ -282,13 +284,15 @@ def mfa_status(user_id: int) -> dict[str, Any]:
             "SELECT COUNT(*) FROM mfa_recovery_codes WHERE user_id=? AND used_at IS NULL",
             (int(user_id),),
         ).fetchone()[0]
-        return {"enabled": bool(row and row[0]), "recovery_codes_remaining": int(remaining or 0)}
+        passkeys = connection.execute("SELECT COUNT(*) FROM webauthn_credentials WHERE user_id=?", (int(user_id),)).fetchone()[0]
+        return {"enabled": bool((row and row[0]) or passkeys), "totp_enabled": bool(row and row[0]),
+                "passkeys": int(passkeys), "recovery_codes_remaining": int(remaining or 0)}
     finally:
         connection.close()
 
 
 def begin_mfa_enrollment(user: dict[str, Any]) -> dict[str, str]:
-    if mfa_status(int(user["id"]))["enabled"]:
+    if mfa_status(int(user["id"]))["totp_enabled"]:
         raise ValueError("Multi-factor authentication is already enabled.")
     secret = pyotp.random_base32(length=32)
     encrypted = _encrypt_totp_secret(secret)

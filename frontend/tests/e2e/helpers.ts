@@ -1,7 +1,5 @@
 import { expect, type Page } from "@playwright/test";
 
-const ORIGIN = "http://localhost:3000";
-
 async function getSystemWithRetry(page: Page): Promise<any> {
   // Retry indefinitely on 429, with exponential backoff cap
   for (let attempt = 0; ; attempt++) {
@@ -35,7 +33,7 @@ export async function registerAcknowledgedUser(page: Page, prefix: string, name:
   const version = (await system.json()).research_acknowledgment.version;
   const acknowledgment = await page.request.post("/api/v1/auth/research-acknowledgment", {
     data: { version, accepted: true },
-    headers: { Origin: ORIGIN },
+    headers: { Origin: new URL(registration.url()).origin },
   });
   expect(acknowledgment.ok(), `Acknowledgment ${acknowledgment.status()}: ${await acknowledgment.text()}`).toBeTruthy();
   return email;

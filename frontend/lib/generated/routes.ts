@@ -16,9 +16,12 @@ export type HttpMethod = "get" | "post" | "put" | "patch" | "delete";
 export type RouteKey =
   | "get /"
   | "post /api/v1/admin/account-lifecycle"
+  | "post /api/v1/admin/accounts/bulk"
   | "get /api/v1/admin/audit"
   | "get /api/v1/admin/calibration"
   | "get /api/v1/admin/calibration/methodology"
+  | "get /api/v1/admin/compliance"
+  | "put /api/v1/admin/compliance/{item_id}"
   | "get /api/v1/admin/diagnostics"
   | "get /api/v1/admin/diagnostics/cache"
   | "get /api/v1/admin/diagnostics/forecasts"
@@ -29,7 +32,11 @@ export type RouteKey =
   | "get /api/v1/admin/errors"
   | "get /api/v1/admin/instruments/reconcile"
   | "post /api/v1/admin/maintenance/{action}"
+  | "get /api/v1/admin/model-operations"
+  | "put /api/v1/admin/model-operations/pause"
+  | "post /api/v1/admin/model-operations/rollback"
   | "get /api/v1/admin/models"
+  | "post /api/v1/admin/operational-roles/bootstrap"
   | "get /api/v1/admin/operations"
   | "get /api/v1/admin/operations/banners"
   | "post /api/v1/admin/operations/banners"
@@ -41,12 +48,16 @@ export type RouteKey =
   | "post /api/v1/admin/operations/kill-switches"
   | "delete /api/v1/admin/operations/kill-switches/{switch_id}"
   | "get /api/v1/admin/overview"
+  | "get /api/v1/admin/queue"
+  | "post /api/v1/admin/queue/replay/{entry_id}"
+  | "post /api/v1/admin/queue/trigger/{name}"
   | "get /api/v1/admin/review"
   | "get /api/v1/admin/security"
   | "get /api/v1/admin/settings"
   | "put /api/v1/admin/settings"
   | "get /api/v1/admin/setup"
   | "post /api/v1/admin/step-up"
+  | "get /api/v1/admin/users"
   | "get /api/v1/alerts"
   | "post /api/v1/alerts"
   | "post /api/v1/alerts/evaluate"
@@ -179,7 +190,8 @@ export type RouteKey =
   | "post /api/v1/watchlist"
   | "delete /api/v1/watchlist/{watchlist_id}"
   | "get /api/v1/workspaces/{workspace}"
-  | "put /api/v1/workspaces/{workspace}";
+  | "put /api/v1/workspaces/{workspace}"
+  | "get /metrics";
 
 /** Typed description of one route: params, query, body and response. */
 export type RouteMap = {
@@ -199,6 +211,15 @@ export type RouteMap = {
     params: never;
     query: never;
     body: AccountLifecyclePayload;
+    response: Record<string, unknown>;
+  };
+  /** Bulk Account Endpoint */
+  "post /api/v1/admin/accounts/bulk": {
+    method: "post";
+    path: "/api/v1/admin/accounts/bulk";
+    params: never;
+    query: never;
+    body: BulkAccountPayload;
     response: Record<string, unknown>;
   };
   /** Admin Audit Endpoint */
@@ -231,6 +252,24 @@ being averaged away. */
     params: never;
     query: never;
     body: undefined;
+    response: Record<string, unknown>;
+  };
+  /** Compliance Operations Endpoint */
+  "get /api/v1/admin/compliance": {
+    method: "get";
+    path: "/api/v1/admin/compliance";
+    params: never;
+    query: { limit?: number };
+    body: undefined;
+    response: Record<string, unknown>;
+  };
+  /** Compliance Update Endpoint */
+  "put /api/v1/admin/compliance/{item_id}": {
+    method: "put";
+    path: "/api/v1/admin/compliance/{item_id}";
+    params: { item_id: string | number };
+    query: never;
+    body: ComplianceReviewPayload;
     response: Record<string, unknown>;
   };
   /** Admin Diagnostics Endpoint */
@@ -323,10 +362,46 @@ being averaged away. */
     body: undefined;
     response: Record<string, unknown>;
   };
+  /** Model Operations Endpoint */
+  "get /api/v1/admin/model-operations": {
+    method: "get";
+    path: "/api/v1/admin/model-operations";
+    params: never;
+    query: never;
+    body: undefined;
+    response: Record<string, unknown>;
+  };
+  /** Tier Pause Endpoint */
+  "put /api/v1/admin/model-operations/pause": {
+    method: "put";
+    path: "/api/v1/admin/model-operations/pause";
+    params: never;
+    query: never;
+    body: TierPausePayload;
+    response: Record<string, unknown>;
+  };
+  /** Model Rollback Endpoint */
+  "post /api/v1/admin/model-operations/rollback": {
+    method: "post";
+    path: "/api/v1/admin/model-operations/rollback";
+    params: never;
+    query: never;
+    body: ModelRollbackPayload;
+    response: Record<string, unknown>;
+  };
   /** Admin Models Endpoint — The authoritative model inventory, including honest negative statuses. */
   "get /api/v1/admin/models": {
     method: "get";
     path: "/api/v1/admin/models";
+    params: never;
+    query: never;
+    body: undefined;
+    response: Record<string, unknown>;
+  };
+  /** Operational Bootstrap Endpoint */
+  "post /api/v1/admin/operational-roles/bootstrap": {
+    method: "post";
+    path: "/api/v1/admin/operational-roles/bootstrap";
     params: never;
     query: never;
     body: undefined;
@@ -431,6 +506,33 @@ being averaged away. */
     body: undefined;
     response: Record<string, unknown>;
   };
+  /** Queue Operations Endpoint */
+  "get /api/v1/admin/queue": {
+    method: "get";
+    path: "/api/v1/admin/queue";
+    params: never;
+    query: never;
+    body: undefined;
+    response: Record<string, unknown>;
+  };
+  /** Queue Replay Endpoint */
+  "post /api/v1/admin/queue/replay/{entry_id}": {
+    method: "post";
+    path: "/api/v1/admin/queue/replay/{entry_id}";
+    params: { entry_id: string | number };
+    query: never;
+    body: QueueActionPayload;
+    response: Record<string, unknown>;
+  };
+  /** Queue Trigger Endpoint */
+  "post /api/v1/admin/queue/trigger/{name}": {
+    method: "post";
+    path: "/api/v1/admin/queue/trigger/{name}";
+    params: { name: string | number };
+    query: never;
+    body: QueueActionPayload;
+    response: unknown;
+  };
   /** Admin Review Endpoint — One consolidated operator view: configuration, data, flags, failures.
 
 Existing admin endpoints each answer one question. This one answers "what
@@ -492,6 +594,15 @@ returned, only presence and derived metadata such as token expiry. */
     params: never;
     query: never;
     body: StepUpChallengePayload;
+    response: Record<string, unknown>;
+  };
+  /** User Directory Endpoint */
+  "get /api/v1/admin/users": {
+    method: "get";
+    path: "/api/v1/admin/users";
+    params: never;
+    query: { anomalous?: (boolean | null); limit?: number; mfa?: (boolean | null); min_age_days?: (number | null); search?: string };
+    body: undefined;
     response: Record<string, unknown>;
   };
   /** Alerts Endpoint */
@@ -1729,6 +1840,15 @@ This builds trust and keeps the team honest. */
     body: WorkspacePayload;
     response: Record<string, unknown>;
   };
+  /** Prometheus Metrics — Aggregate process metrics for a trusted-network Prometheus scraper. */
+  "get /metrics": {
+    method: "get";
+    path: "/metrics";
+    params: never;
+    query: never;
+    body: undefined;
+    response: unknown;
+  };
 };
 
 export type RouteMethod<K extends RouteKey> = RouteMap[K]["method"];
@@ -1738,17 +1858,19 @@ export type RouteQuery<K extends RouteKey> = RouteMap[K]["query"];
 export type RouteBody<K extends RouteKey> = RouteMap[K]["body"];
 export type RouteResponse<K extends RouteKey> = RouteMap[K]["response"];
 
-export type OperationId = "root__get" | "admin_account_lifecycle_endpoint_api_v1_admin_account_lifecycle_post" | "admin_audit_endpoint_api_v1_admin_audit_get" | "admin_calibration_endpoint_api_v1_admin_calibration_get" | "admin_calibration_methodology_endpoint_api_v1_admin_calibration_methodology_get" | "admin_diagnostics_endpoint_api_v1_admin_diagnostics_get" | "admin_cache_diagnostics_endpoint_api_v1_admin_diagnostics_cache_get" | "admin_forecast_diagnostics_endpoint_api_v1_admin_diagnostics_forecasts_get" | "admin_job_diagnostics_endpoint_api_v1_admin_diagnostics_jobs_get" | "admin_provider_diagnostics_endpoint_api_v1_admin_diagnostics_providers_get" | "admin_provider_order_endpoint_api_v1_admin_diagnostics_providers_order_put" | "admin_provider_test_endpoint_api_v1_admin_diagnostics_providers_test_post" | "admin_errors_endpoint_api_v1_admin_errors_get" | "reconcile_instruments_endpoint_api_v1_admin_instruments_reconcile_get" | "admin_maintenance_endpoint_api_v1_admin_maintenance__action__post" | "admin_models_endpoint_api_v1_admin_models_get" | "admin_operations_endpoint_api_v1_admin_operations_get" | "admin_list_banners_endpoint_api_v1_admin_operations_banners_get" | "admin_draft_banner_endpoint_api_v1_admin_operations_banners_post" | "admin_publish_banner_endpoint_api_v1_admin_operations_banners__banner_id__publish_post" | "admin_withdraw_banner_endpoint_api_v1_admin_operations_banners__banner_id__withdraw_post" | "admin_cache_invalidate_endpoint_api_v1_admin_operations_cache_invalidate_post" | "admin_feature_flag_endpoint_api_v1_admin_operations_flags__name__put" | "admin_list_kill_switches_endpoint_api_v1_admin_operations_kill_switches_get" | "admin_create_kill_switch_endpoint_api_v1_admin_operations_kill_switches_post" | "admin_revoke_kill_switch_endpoint_api_v1_admin_operations_kill_switches__switch_id__delete" | "admin_overview_endpoint_api_v1_admin_overview_get" | "admin_review_endpoint_api_v1_admin_review_get" | "admin_security_center_endpoint_api_v1_admin_security_get" | "admin_settings_endpoint_api_v1_admin_settings_get" | "admin_settings_update_endpoint_api_v1_admin_settings_put" | "admin_setup_endpoint_api_v1_admin_setup_get" | "admin_step_up_endpoint_api_v1_admin_step_up_post" | "alerts_endpoint_api_v1_alerts_get" | "alerts_create_endpoint_api_v1_alerts_post" | "alerts_evaluate_endpoint_api_v1_alerts_evaluate_post" | "alerts_toggle_endpoint_api_v1_alerts__alert_id__put" | "alerts_delete_endpoint_api_v1_alerts__alert_id__delete" | "audit_endpoint_api_v1_audit_get" | "delete_account_endpoint_api_v1_auth_account_delete" | "google_oauth_callback_api_v1_auth_google_callback_get" | "google_oauth_start_api_v1_auth_google_start_get" | "login_endpoint_api_v1_auth_login_post" | "login_anomalies_endpoint_api_v1_auth_login_anomalies_get" | "login_anomaly_ack_endpoint_api_v1_auth_login_anomalies__anomaly_id__ack_post" | "logout_endpoint_api_v1_auth_logout_post" | "logout_all_endpoint_api_v1_auth_logout_all_post" | "me_endpoint_api_v1_auth_me_get" | "mfa_status_endpoint_api_v1_auth_mfa_get" | "mfa_disable_endpoint_api_v1_auth_mfa_disable_post" | "mfa_enable_endpoint_api_v1_auth_mfa_enable_post" | "mfa_recovery_codes_endpoint_api_v1_auth_mfa_recovery_codes_post" | "mfa_setup_endpoint_api_v1_auth_mfa_setup_post" | "mfa_verify_endpoint_api_v1_auth_mfa_verify_post" | "oauth_status_endpoint_api_v1_auth_oauth_status_get" | "register_endpoint_api_v1_auth_register_post" | "research_acknowledgment_endpoint_api_v1_auth_research_acknowledgment_post" | "sessions_endpoint_api_v1_auth_sessions_get" | "revoke_session_endpoint_api_v1_auth_sessions__session_id__delete" | "webauthn_list_endpoint_api_v1_auth_webauthn_credentials_get" | "webauthn_delete_endpoint_api_v1_auth_webauthn_credentials__credential_pk__delete" | "webauthn_mfa_options_endpoint_api_v1_auth_webauthn_mfa_options_post" | "webauthn_mfa_verify_endpoint_api_v1_auth_webauthn_mfa_verify_post" | "webauthn_register_options_endpoint_api_v1_auth_webauthn_register_options_post" | "webauthn_register_verify_endpoint_api_v1_auth_webauthn_register_verify_post" | "morning_brief_endpoint_api_v1_brief_get" | "chart_layouts_list_endpoint_api_v1_chart_layouts_get" | "chart_layouts_create_endpoint_api_v1_chart_layouts_post" | "chart_layouts_get_endpoint_api_v1_chart_layouts__layout_id__get" | "chart_layouts_delete_endpoint_api_v1_chart_layouts__layout_id__delete" | "compare_endpoint_api_v1_compare_get" | "expected_move_endpoint_api_v1_derivatives_expected_move__symbol__get" | "expiry_endpoint_api_v1_derivatives_expiries__underlying__get" | "futures_analysis_endpoint_api_v1_derivatives_futures_analyse_post" | "futures_term_structure_endpoint_api_v1_derivatives_futures_term_structure_post" | "iv_stats_endpoint_api_v1_derivatives_iv_stats__underlying__get" | "live_margin_endpoint_api_v1_derivatives_margin_post" | "oi_heatmap_endpoint_api_v1_derivatives_oi_heatmap_post" | "binomial_endpoint_api_v1_derivatives_options_binomial_post" | "option_chain_endpoint_api_v1_derivatives_options_chain_post" | "option_contracts_endpoint_api_v1_derivatives_options_contracts__underlying__get" | "option_greeks_endpoint_api_v1_derivatives_options_greeks_post" | "live_option_chain_endpoint_api_v1_derivatives_options_live_chain__underlying__get" | "option_scenarios_endpoint_api_v1_derivatives_options_scenarios_post" | "strategy_build_endpoint_api_v1_derivatives_strategies_build_post" | "strategy_pnl_endpoint_api_v1_derivatives_strategies_pnl_post" | "strategy_templates_endpoint_api_v1_derivatives_strategies_templates_get" | "feature_flags_endpoint_api_v1_features_get" | "create_forecast_job_api_v1_forecast_jobs_post" | "get_forecast_job_api_v1_forecast_jobs__job_id__get" | "delete_forecast_job_api_v1_forecast_jobs__job_id__delete" | "forward_test_list_endpoint_api_v1_forward_tests_get" | "forward_test_start_endpoint_api_v1_forward_tests_post" | "forward_test_evaluate_endpoint_api_v1_forward_tests__test_id__evaluate_post" | "forward_test_scorecard_endpoint_api_v1_forward_tests__test_id__scorecard_get" | "forward_test_stop_endpoint_api_v1_forward_tests__test_id__stop_post" | "health_api_v1_health_get" | "indicators_endpoint_api_v1_indicators__symbol__get" | "refresh_calendar_endpoint_api_v1_market_calendar_refresh__year__post" | "history_support_endpoint_api_v1_market_history_support_get" | "history_endpoint_api_v1_market_history__symbol__get" | "refresh_instruments_api_v1_market_instruments_refresh_post" | "market_provider_health_endpoint_api_v1_market_providers_health_get" | "quote_endpoint_api_v1_market_quote__symbol__get" | "market_search_api_v1_market_search_get" | "market_status_endpoint_api_v1_market_status_get" | "market_stream_health_endpoint_api_v1_market_stream_health_get" | "api_metrics_api_v1_metrics_get" | "news_endpoint_api_v1_news__symbol__get" | "multi_leg_backtest_endpoint_api_v1_options_backtest_post" | "option_payoff_endpoint_api_v1_options_payoff_post" | "paper_account_endpoint_api_v1_paper_account_get" | "paper_badges_endpoint_api_v1_paper_badges_get" | "paper_challenges_endpoint_api_v1_paper_challenges_get" | "historical_challenges_endpoint_api_v1_paper_challenges_historical_get" | "historical_challenges_mine_endpoint_api_v1_paper_challenges_historical_mine_get" | "historical_challenge_reveal_endpoint_api_v1_paper_challenges_historical__key__reveal_post" | "paper_journal_endpoint_api_v1_paper_journal_get" | "paper_leaderboard_endpoint_api_v1_paper_leaderboard_get" | "paper_leaderboard_visibility_endpoint_api_v1_paper_leaderboard_visibility_put" | "paper_order_endpoint_api_v1_paper_orders_post" | "paper_process_endpoint_api_v1_paper_orders_process_post" | "paper_cancel_endpoint_api_v1_paper_orders__order_id__delete" | "patterns_endpoint_api_v1_patterns__symbol__get" | "portfolio_endpoint_api_v1_portfolio_get" | "portfolio_buy_endpoint_api_v1_portfolio_post" | "portfolio_update_endpoint_api_v1_portfolio__holding_id__put" | "portfolio_delete_endpoint_api_v1_portfolio__holding_id__delete" | "portfolio_sell_endpoint_api_v1_portfolio__holding_id__sell_post" | "prediction_endpoint_api_v1_predict__symbol__get" | "prediction_calibration_endpoint_api_v1_predictions_calibration_get" | "prediction_history_endpoint_api_v1_predictions_history_get" | "prediction_quality_endpoint_api_v1_predictions_quality_get" | "settle_prediction_endpoint_api_v1_predictions__prediction_id__settle_post" | "save_prediction_endpoint_api_v1_predictions__symbol__save_post" | "readiness_api_v1_ready_get" | "forecast_report_endpoint_api_v1_reports_forecast__symbol__pdf_get" | "portfolio_report_endpoint_api_v1_reports_portfolio_pdf_get" | "research_assistant_endpoint_api_v1_research_assistant_post" | "position_size_endpoint_api_v1_risk_position_size_post" | "risk_endpoint_api_v1_risk__symbol__get" | "public_scorecard_endpoint_api_v1_scorecard_get" | "screener_fields_endpoint_api_v1_screener_fields_get" | "screener_run_endpoint_api_v1_screener_run_post" | "screener_saved_list_endpoint_api_v1_screener_saved_get" | "screener_save_endpoint_api_v1_screener_saved_post" | "screener_saved_delete_endpoint_api_v1_screener_saved__screen_id__delete" | "screener_saved_run_endpoint_api_v1_screener_saved__screen_id__run_post" | "sector_rotation_endpoint_api_v1_sector_rotation_get" | "sentiment_trend_endpoint_api_v1_sentiment__symbol__get" | "sentiment_capture_endpoint_api_v1_sentiment__symbol__capture_post" | "public_status_endpoint_api_v1_status_get" | "strategy_list_endpoint_api_v1_strategies_get" | "strategy_save_endpoint_api_v1_strategies_post" | "strategy_backtest_endpoint_api_v1_strategies_backtest_post" | "strategy_metadata_endpoint_api_v1_strategies_metadata_get" | "strategy_run_endpoint_api_v1_strategies_run_post" | "strategy_delete_endpoint_api_v1_strategies__strategy_id__delete" | "strategy_endpoint_api_v1_strategy__symbol__get" | "system_endpoint_api_v1_system_get" | "user_provider_test_endpoint_api_v1_system_providers_test_post" | "watchlist_endpoint_api_v1_watchlist_get" | "add_watchlist_endpoint_api_v1_watchlist_post" | "remove_watchlist_endpoint_api_v1_watchlist__watchlist_id__delete" | "workspace_get_endpoint_api_v1_workspaces__workspace__get" | "workspace_put_endpoint_api_v1_workspaces__workspace__put";
+export type OperationId = "root__get" | "admin_account_lifecycle_endpoint_api_v1_admin_account_lifecycle_post" | "bulk_account_endpoint_api_v1_admin_accounts_bulk_post" | "admin_audit_endpoint_api_v1_admin_audit_get" | "admin_calibration_endpoint_api_v1_admin_calibration_get" | "admin_calibration_methodology_endpoint_api_v1_admin_calibration_methodology_get" | "compliance_operations_endpoint_api_v1_admin_compliance_get" | "compliance_update_endpoint_api_v1_admin_compliance__item_id__put" | "admin_diagnostics_endpoint_api_v1_admin_diagnostics_get" | "admin_cache_diagnostics_endpoint_api_v1_admin_diagnostics_cache_get" | "admin_forecast_diagnostics_endpoint_api_v1_admin_diagnostics_forecasts_get" | "admin_job_diagnostics_endpoint_api_v1_admin_diagnostics_jobs_get" | "admin_provider_diagnostics_endpoint_api_v1_admin_diagnostics_providers_get" | "admin_provider_order_endpoint_api_v1_admin_diagnostics_providers_order_put" | "admin_provider_test_endpoint_api_v1_admin_diagnostics_providers_test_post" | "admin_errors_endpoint_api_v1_admin_errors_get" | "reconcile_instruments_endpoint_api_v1_admin_instruments_reconcile_get" | "admin_maintenance_endpoint_api_v1_admin_maintenance__action__post" | "model_operations_endpoint_api_v1_admin_model_operations_get" | "tier_pause_endpoint_api_v1_admin_model_operations_pause_put" | "model_rollback_endpoint_api_v1_admin_model_operations_rollback_post" | "admin_models_endpoint_api_v1_admin_models_get" | "operational_bootstrap_endpoint_api_v1_admin_operational_roles_bootstrap_post" | "admin_operations_endpoint_api_v1_admin_operations_get" | "admin_list_banners_endpoint_api_v1_admin_operations_banners_get" | "admin_draft_banner_endpoint_api_v1_admin_operations_banners_post" | "admin_publish_banner_endpoint_api_v1_admin_operations_banners__banner_id__publish_post" | "admin_withdraw_banner_endpoint_api_v1_admin_operations_banners__banner_id__withdraw_post" | "admin_cache_invalidate_endpoint_api_v1_admin_operations_cache_invalidate_post" | "admin_feature_flag_endpoint_api_v1_admin_operations_flags__name__put" | "admin_list_kill_switches_endpoint_api_v1_admin_operations_kill_switches_get" | "admin_create_kill_switch_endpoint_api_v1_admin_operations_kill_switches_post" | "admin_revoke_kill_switch_endpoint_api_v1_admin_operations_kill_switches__switch_id__delete" | "admin_overview_endpoint_api_v1_admin_overview_get" | "queue_operations_endpoint_api_v1_admin_queue_get" | "queue_replay_endpoint_api_v1_admin_queue_replay__entry_id__post" | "queue_trigger_endpoint_api_v1_admin_queue_trigger__name__post" | "admin_review_endpoint_api_v1_admin_review_get" | "admin_security_center_endpoint_api_v1_admin_security_get" | "admin_settings_endpoint_api_v1_admin_settings_get" | "admin_settings_update_endpoint_api_v1_admin_settings_put" | "admin_setup_endpoint_api_v1_admin_setup_get" | "admin_step_up_endpoint_api_v1_admin_step_up_post" | "user_directory_endpoint_api_v1_admin_users_get" | "alerts_endpoint_api_v1_alerts_get" | "alerts_create_endpoint_api_v1_alerts_post" | "alerts_evaluate_endpoint_api_v1_alerts_evaluate_post" | "alerts_toggle_endpoint_api_v1_alerts__alert_id__put" | "alerts_delete_endpoint_api_v1_alerts__alert_id__delete" | "audit_endpoint_api_v1_audit_get" | "delete_account_endpoint_api_v1_auth_account_delete" | "google_oauth_callback_api_v1_auth_google_callback_get" | "google_oauth_start_api_v1_auth_google_start_get" | "login_endpoint_api_v1_auth_login_post" | "login_anomalies_endpoint_api_v1_auth_login_anomalies_get" | "login_anomaly_ack_endpoint_api_v1_auth_login_anomalies__anomaly_id__ack_post" | "logout_endpoint_api_v1_auth_logout_post" | "logout_all_endpoint_api_v1_auth_logout_all_post" | "me_endpoint_api_v1_auth_me_get" | "mfa_status_endpoint_api_v1_auth_mfa_get" | "mfa_disable_endpoint_api_v1_auth_mfa_disable_post" | "mfa_enable_endpoint_api_v1_auth_mfa_enable_post" | "mfa_recovery_codes_endpoint_api_v1_auth_mfa_recovery_codes_post" | "mfa_setup_endpoint_api_v1_auth_mfa_setup_post" | "mfa_verify_endpoint_api_v1_auth_mfa_verify_post" | "oauth_status_endpoint_api_v1_auth_oauth_status_get" | "register_endpoint_api_v1_auth_register_post" | "research_acknowledgment_endpoint_api_v1_auth_research_acknowledgment_post" | "sessions_endpoint_api_v1_auth_sessions_get" | "revoke_session_endpoint_api_v1_auth_sessions__session_id__delete" | "webauthn_list_endpoint_api_v1_auth_webauthn_credentials_get" | "webauthn_delete_endpoint_api_v1_auth_webauthn_credentials__credential_pk__delete" | "webauthn_mfa_options_endpoint_api_v1_auth_webauthn_mfa_options_post" | "webauthn_mfa_verify_endpoint_api_v1_auth_webauthn_mfa_verify_post" | "webauthn_register_options_endpoint_api_v1_auth_webauthn_register_options_post" | "webauthn_register_verify_endpoint_api_v1_auth_webauthn_register_verify_post" | "morning_brief_endpoint_api_v1_brief_get" | "chart_layouts_list_endpoint_api_v1_chart_layouts_get" | "chart_layouts_create_endpoint_api_v1_chart_layouts_post" | "chart_layouts_get_endpoint_api_v1_chart_layouts__layout_id__get" | "chart_layouts_delete_endpoint_api_v1_chart_layouts__layout_id__delete" | "compare_endpoint_api_v1_compare_get" | "expected_move_endpoint_api_v1_derivatives_expected_move__symbol__get" | "expiry_endpoint_api_v1_derivatives_expiries__underlying__get" | "futures_analysis_endpoint_api_v1_derivatives_futures_analyse_post" | "futures_term_structure_endpoint_api_v1_derivatives_futures_term_structure_post" | "iv_stats_endpoint_api_v1_derivatives_iv_stats__underlying__get" | "live_margin_endpoint_api_v1_derivatives_margin_post" | "oi_heatmap_endpoint_api_v1_derivatives_oi_heatmap_post" | "binomial_endpoint_api_v1_derivatives_options_binomial_post" | "option_chain_endpoint_api_v1_derivatives_options_chain_post" | "option_contracts_endpoint_api_v1_derivatives_options_contracts__underlying__get" | "option_greeks_endpoint_api_v1_derivatives_options_greeks_post" | "live_option_chain_endpoint_api_v1_derivatives_options_live_chain__underlying__get" | "option_scenarios_endpoint_api_v1_derivatives_options_scenarios_post" | "strategy_build_endpoint_api_v1_derivatives_strategies_build_post" | "strategy_pnl_endpoint_api_v1_derivatives_strategies_pnl_post" | "strategy_templates_endpoint_api_v1_derivatives_strategies_templates_get" | "feature_flags_endpoint_api_v1_features_get" | "create_forecast_job_api_v1_forecast_jobs_post" | "get_forecast_job_api_v1_forecast_jobs__job_id__get" | "delete_forecast_job_api_v1_forecast_jobs__job_id__delete" | "forward_test_list_endpoint_api_v1_forward_tests_get" | "forward_test_start_endpoint_api_v1_forward_tests_post" | "forward_test_evaluate_endpoint_api_v1_forward_tests__test_id__evaluate_post" | "forward_test_scorecard_endpoint_api_v1_forward_tests__test_id__scorecard_get" | "forward_test_stop_endpoint_api_v1_forward_tests__test_id__stop_post" | "health_api_v1_health_get" | "indicators_endpoint_api_v1_indicators__symbol__get" | "refresh_calendar_endpoint_api_v1_market_calendar_refresh__year__post" | "history_support_endpoint_api_v1_market_history_support_get" | "history_endpoint_api_v1_market_history__symbol__get" | "refresh_instruments_api_v1_market_instruments_refresh_post" | "market_provider_health_endpoint_api_v1_market_providers_health_get" | "quote_endpoint_api_v1_market_quote__symbol__get" | "market_search_api_v1_market_search_get" | "market_status_endpoint_api_v1_market_status_get" | "market_stream_health_endpoint_api_v1_market_stream_health_get" | "api_metrics_api_v1_metrics_get" | "news_endpoint_api_v1_news__symbol__get" | "multi_leg_backtest_endpoint_api_v1_options_backtest_post" | "option_payoff_endpoint_api_v1_options_payoff_post" | "paper_account_endpoint_api_v1_paper_account_get" | "paper_badges_endpoint_api_v1_paper_badges_get" | "paper_challenges_endpoint_api_v1_paper_challenges_get" | "historical_challenges_endpoint_api_v1_paper_challenges_historical_get" | "historical_challenges_mine_endpoint_api_v1_paper_challenges_historical_mine_get" | "historical_challenge_reveal_endpoint_api_v1_paper_challenges_historical__key__reveal_post" | "paper_journal_endpoint_api_v1_paper_journal_get" | "paper_leaderboard_endpoint_api_v1_paper_leaderboard_get" | "paper_leaderboard_visibility_endpoint_api_v1_paper_leaderboard_visibility_put" | "paper_order_endpoint_api_v1_paper_orders_post" | "paper_process_endpoint_api_v1_paper_orders_process_post" | "paper_cancel_endpoint_api_v1_paper_orders__order_id__delete" | "patterns_endpoint_api_v1_patterns__symbol__get" | "portfolio_endpoint_api_v1_portfolio_get" | "portfolio_buy_endpoint_api_v1_portfolio_post" | "portfolio_update_endpoint_api_v1_portfolio__holding_id__put" | "portfolio_delete_endpoint_api_v1_portfolio__holding_id__delete" | "portfolio_sell_endpoint_api_v1_portfolio__holding_id__sell_post" | "prediction_endpoint_api_v1_predict__symbol__get" | "prediction_calibration_endpoint_api_v1_predictions_calibration_get" | "prediction_history_endpoint_api_v1_predictions_history_get" | "prediction_quality_endpoint_api_v1_predictions_quality_get" | "settle_prediction_endpoint_api_v1_predictions__prediction_id__settle_post" | "save_prediction_endpoint_api_v1_predictions__symbol__save_post" | "readiness_api_v1_ready_get" | "forecast_report_endpoint_api_v1_reports_forecast__symbol__pdf_get" | "portfolio_report_endpoint_api_v1_reports_portfolio_pdf_get" | "research_assistant_endpoint_api_v1_research_assistant_post" | "position_size_endpoint_api_v1_risk_position_size_post" | "risk_endpoint_api_v1_risk__symbol__get" | "public_scorecard_endpoint_api_v1_scorecard_get" | "screener_fields_endpoint_api_v1_screener_fields_get" | "screener_run_endpoint_api_v1_screener_run_post" | "screener_saved_list_endpoint_api_v1_screener_saved_get" | "screener_save_endpoint_api_v1_screener_saved_post" | "screener_saved_delete_endpoint_api_v1_screener_saved__screen_id__delete" | "screener_saved_run_endpoint_api_v1_screener_saved__screen_id__run_post" | "sector_rotation_endpoint_api_v1_sector_rotation_get" | "sentiment_trend_endpoint_api_v1_sentiment__symbol__get" | "sentiment_capture_endpoint_api_v1_sentiment__symbol__capture_post" | "public_status_endpoint_api_v1_status_get" | "strategy_list_endpoint_api_v1_strategies_get" | "strategy_save_endpoint_api_v1_strategies_post" | "strategy_backtest_endpoint_api_v1_strategies_backtest_post" | "strategy_metadata_endpoint_api_v1_strategies_metadata_get" | "strategy_run_endpoint_api_v1_strategies_run_post" | "strategy_delete_endpoint_api_v1_strategies__strategy_id__delete" | "strategy_endpoint_api_v1_strategy__symbol__get" | "system_endpoint_api_v1_system_get" | "user_provider_test_endpoint_api_v1_system_providers_test_post" | "watchlist_endpoint_api_v1_watchlist_get" | "add_watchlist_endpoint_api_v1_watchlist_post" | "remove_watchlist_endpoint_api_v1_watchlist__watchlist_id__delete" | "workspace_get_endpoint_api_v1_workspaces__workspace__get" | "workspace_put_endpoint_api_v1_workspaces__workspace__put" | "prometheus_metrics_metrics_get";
 
 // --- Component schemas -------------------------------------------------------
-export type AccountLifecyclePayload = { account_id: number; action: "suspend" | "reinstate" | "force_logout" | "reset_lockout"; reason?: string };
+export type AccountLifecyclePayload = { account_id: number; action: "suspend" | "reinstate" | "force_logout" | "reset_lockout" | "force_mfa_reset"; reason: string };
 export type AdminSettingsPayload = { updates?: Record<string, unknown> };
 export type AlertPayload = { condition: "ABOVE" | "BELOW" | "FORECAST_HIGH_ABOVE" | "FORECAST_LOW_BELOW"; confidence_level?: number; email_enabled?: boolean; symbol: string; threshold: number; training_window?: "1w" | "1mo" | "3mo" | "1y" | "5y" };
 export type AlertTogglePayload = { active: boolean };
 export type BannerDraftPayload = { body: string; ends_in_hours?: number; headline: string; level: string; starts_at?: (string | null) };
 export type BannerPublishPayload = { confirmed_preview?: boolean };
+export type BulkAccountPayload = { account_ids: number[]; action: "suspend" | "reinstate" | "force_logout" | "reset_lockout" | "force_mfa_reset"; reason: string };
 export type CacheInvalidationPayload = { cache: string; reason: string };
 export type ChartLayoutPayload = { name: string; overlays?: Record<string, boolean>; symbol?: string; timeframe?: string; visible_range?: (Record<string, number> | null) };
+export type ComplianceReviewPayload = { note: string; status: "open" | "in_progress" | "complete" | "blocked" };
 export type Credentials = { email: string; next?: string; password: string };
 export type DeleteAccountPayload = { confirmation: "DELETE" };
 export type FeatureFlagPayload = { enabled: boolean; reason: string; rollout_percent?: number };
@@ -1766,6 +1888,7 @@ export type KillSwitchRevokePayload = { reason: string };
 export type LeaderboardPrivacyPayload = { enabled: boolean };
 export type LiveMarginPayload = { instrument_type?: "EQUITY" | "FUTURE" | "OPTION"; lot_size?: number; price?: number; product?: "D" | "I"; quantity: number; symbol: string; transaction_type?: "BUY" | "SELL" };
 export type MfaCodePayload = { code: string };
+export type ModelRollbackPayload = { candidate_id: string; reason: string };
 export type MultiLegBacktestLegPayload = { contracts?: number; lot_size?: number; side?: string; strike_offset_pct: number; type: string };
 export type MultiLegBacktestPayload = { costs_per_cycle?: number; days_to_expiry?: number; dividend_yield?: number; entry_every_sessions?: (number | null); legs?: MultiLegBacktestLegPayload[]; risk_free_rate?: number; timeframe?: string; underlying: string; volatility?: number; window?: string };
 export type OiHeatmapPayload = { expiry?: (string | null); rows: OiHeatmapRowPayload[]; spot_price?: (number | null) };
@@ -1781,6 +1904,7 @@ export type PortfolioSellPayload = { sell_price: number; shares: number };
 export type PortfolioUpdatePayload = { buy_price: number; shares: number };
 export type PositionSizePayload = { account_value: number; entry_price: number; max_allocation?: number; risk_fraction?: number; stop_loss: number };
 export type ProviderOrderPayload = { order: string[] };
+export type QueueActionPayload = { reason: string };
 export type Registration = { date_of_birth?: (string | null); email: string; name: string; next?: string; password: string };
 export type ResearchAcknowledgmentPayload = { accepted: true; version: string };
 export type ResearchAssistantPayload = { question: string; symbol: string };
@@ -1795,21 +1919,25 @@ export type StrategyDefinitionPayload = { entry?: StrategyGroupPayload[]; exit?:
 export type StrategyGroupPayload = { conditions?: StrategyConditionPayload[]; join?: string };
 export type StrategyPnlLegPayload = { days_to_expiry?: number; label?: (string | null); lot_size?: number; mark_price?: (number | null); premium: number; quantity?: number; side?: "buy" | "sell"; strike: number; type?: "call" | "put" };
 export type StrategyPnlPayload = { days_to_expiry_now?: number; dividend_yield?: number; legs: StrategyPnlLegPayload[]; risk_free_rate?: number; spot_now: number; volatility_now?: (number | null) };
+export type TierPausePayload = { paused: boolean; reason: string; tier: "T0" | "T1" | "T2" | "T3" | "T4" };
 export type ValidationError = { ctx?: Record<string, unknown>; input?: unknown; loc: (string | number)[]; msg: string; type: string };
 export type WatchlistPayload = { symbol: string };
 export type WebAuthnPayload = { challenge: string; label?: (string | null); response?: Record<string, unknown> };
 export type WorkspacePayload = { layout: (Record<string, unknown> | string | null) };
 
 /** Number of operations captured from the OpenAPI schema. */
-export const ROUTE_COUNT = 166;
+export const ROUTE_COUNT = 178;
 
 /** Sorted route keys for exhaustive iteration in tests. */
 export const ROUTE_KEYS: readonly RouteKey[] = [
   "get /",
   "post /api/v1/admin/account-lifecycle",
+  "post /api/v1/admin/accounts/bulk",
   "get /api/v1/admin/audit",
   "get /api/v1/admin/calibration",
   "get /api/v1/admin/calibration/methodology",
+  "get /api/v1/admin/compliance",
+  "put /api/v1/admin/compliance/{item_id}",
   "get /api/v1/admin/diagnostics",
   "get /api/v1/admin/diagnostics/cache",
   "get /api/v1/admin/diagnostics/forecasts",
@@ -1820,7 +1948,11 @@ export const ROUTE_KEYS: readonly RouteKey[] = [
   "get /api/v1/admin/errors",
   "get /api/v1/admin/instruments/reconcile",
   "post /api/v1/admin/maintenance/{action}",
+  "get /api/v1/admin/model-operations",
+  "put /api/v1/admin/model-operations/pause",
+  "post /api/v1/admin/model-operations/rollback",
   "get /api/v1/admin/models",
+  "post /api/v1/admin/operational-roles/bootstrap",
   "get /api/v1/admin/operations",
   "get /api/v1/admin/operations/banners",
   "post /api/v1/admin/operations/banners",
@@ -1832,12 +1964,16 @@ export const ROUTE_KEYS: readonly RouteKey[] = [
   "post /api/v1/admin/operations/kill-switches",
   "delete /api/v1/admin/operations/kill-switches/{switch_id}",
   "get /api/v1/admin/overview",
+  "get /api/v1/admin/queue",
+  "post /api/v1/admin/queue/replay/{entry_id}",
+  "post /api/v1/admin/queue/trigger/{name}",
   "get /api/v1/admin/review",
   "get /api/v1/admin/security",
   "get /api/v1/admin/settings",
   "put /api/v1/admin/settings",
   "get /api/v1/admin/setup",
   "post /api/v1/admin/step-up",
+  "get /api/v1/admin/users",
   "get /api/v1/alerts",
   "post /api/v1/alerts",
   "post /api/v1/alerts/evaluate",
@@ -1971,4 +2107,5 @@ export const ROUTE_KEYS: readonly RouteKey[] = [
   "delete /api/v1/watchlist/{watchlist_id}",
   "get /api/v1/workspaces/{workspace}",
   "put /api/v1/workspaces/{workspace}",
+  "get /metrics",
 ];

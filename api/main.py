@@ -147,6 +147,12 @@ def api_metrics() -> dict[str, Any]:
     }
 
 
+@app.get("/metrics", response_class=Response)
+def prometheus_metrics() -> Response:
+    """Aggregate process metrics for a trusted-network Prometheus scraper."""
+    return Response(API_METRICS.prometheus(), media_type="text/plain; version=0.0.4; charset=utf-8")
+
+
 @app.websocket("/ws/quotes/{symbol}")
 async def quote_stream(websocket: WebSocket, symbol: str, interval_seconds: float = 1.0, timeframe: str = "1m"):
     """Fan out one provider polling stream per symbol to every browser subscriber."""

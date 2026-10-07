@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter
 from api.deps import *  # noqa: F401,F403
+from services.admin_registry import effective_role
 from database import delete_user_data, record_audit_event
 from services.compliance import RESEARCH_ACKNOWLEDGMENT_VERSION, research_acknowledgment_required
 from services.auth_api import (
@@ -41,18 +42,19 @@ def _set_mfa_challenge_cookie(response: Response, request: Request, token: str) 
         secure=_secure_cookie(request),
         samesite="lax",
         max_age=300,
-        path="/api/v1/auth/mfa",
+        path="/api/v1/auth",
     )
 
 
 def _clear_mfa_challenge_cookie(response: Response, request: Request) -> None:
     response.delete_cookie(
         MFA_CHALLENGE_COOKIE,
-        path="/api/v1/auth/mfa",
+        path="/api/v1/auth",
         secure=_secure_cookie(request),
         httponly=True,
         samesite="lax",
     )
+    response.delete_cookie(MFA_CHALLENGE_COOKIE, path="/api/v1/auth/mfa", secure=_secure_cookie(request), httponly=True, samesite="lax")
 
 
 
@@ -75,9 +77,6 @@ def login_endpoint(payload: Credentials, response: Response, request: Request) -
     try:
         from services.login_anomaly import record_login, strict_mode
         client_ip = request.client.host if request.client else None
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            client_ip = forwarded.split(",")[0].strip()
         anomaly = record_login(
             int(result["id"]),
             user_agent=request.headers.get("user-agent", ""),
@@ -261,7 +260,7 @@ def me_endpoint(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
             "account_status": user.get("account_status", "active"),
             "mfa_enabled": bool(user.get("mfa_enabled", False)),
             "research_acknowledgment_required": research_acknowledgment_required(user["id"]),
-            "role": "admin" if _is_admin(user) else "user",
+            "role": effective_role(user),
         }
     }
 

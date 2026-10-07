@@ -126,6 +126,14 @@ Spreadsheet applications may execute cells beginning with formula characters. Re
 
 Avoid testing against a copy of a real user database. Automated tests use temporary SQLite paths through `tests/conftest.py`.
 
+Browser verification now launches `scripts/run_e2e_backend.py` with a disposable
+encrypted account database and fresh test credentials. It refuses reuse of
+already-running personal servers. `STOCKPILOT_DATABASE_PATH` selects an explicit
+local database path shared by authentication and application storage; normal
+startup keeps the existing default. Authentication and named row reads use the
+same SQLCipher-aware driver policy, without plaintext fallback when encryption
+is requested. Run migrations/backups before enabling a key on existing data.
+
 The Account page provides an authenticated, confirmation-gated right-to-erasure flow. Deletion runs in one transaction and discovers user ownership columns across existing SQLite tables, removes indirect forward-test events and email-keyed security records, and deletes the identity last. The current retention scope and backup limitation are documented in `DATA_RETENTION_AND_DELETION.md`. This technical control is not a claim of GDPR or DPDP legal compliance.
 
 The onboarding research disclaimer has a server-controlled version. Acceptance is persisted as a user audit event, while every terminal surface displays the research/education-only and no-recommendation notice. A qualified reviewer must still approve public-facing language before non-private use.

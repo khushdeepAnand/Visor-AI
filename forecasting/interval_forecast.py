@@ -684,9 +684,19 @@ class _EtsRegressor:
 
 
 def _fit_base_models(X: pd.DataFrame, y: pd.Series, *, low_data: bool = False) -> dict[str, Any]:
+    from sklearn.exceptions import ConvergenceWarning
     # Reuse the established model implementations instead of re-deriving them.
     names = ["Linear Regression", "ElasticNet", "Random Forest", "Gradient Boosting"]
-    models = {name: legacy_models._train_model_by_name(name, X, y) for name in names}
+    models = {}
+    for name in names:
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", ConvergenceWarning)
+                models[name] = legacy_models._train_model_by_name(name, X, y)
+        except ConvergenceWarning:
+            # An unoptimised member is not evidence. Remaining members and the
+            # persistence anchor are evaluated as the exact published blend.
+            continue
     models["Naive Persistence"] = _PersistenceRegressor()
 
     # Low-data runs join the classical challengers the research recommends for
@@ -2512,8 +2522,10 @@ def forecast_range(
         enhanced["context_inputs"] = payload["context_inputs"]
         enhanced["context_metrics"] = payload["context_metrics"]
         enhanced["lineage"] = payload["lineage"]
-        return enhanced
+        from forecasting.live_decay import apply_tier_controls
+        return apply_tier_controls(enhanced)
     except Exception as exc:
         # v13 enhancements are best-effort; never break the core forecast
         payload["enhancement_status"] = {"status": "degraded", "reason": type(exc).__name__}
-        return payload
+        from forecasting.live_decay import apply_tier_controls
+        return apply_tier_controls(payload)

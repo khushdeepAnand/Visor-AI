@@ -1,5 +1,171 @@
 # StockPilot AI v18 RC — implementation and verification status
 
+## Resumed Supabase-readiness verification — 2026-10-07
+
+This resumption completes the supplied **prepare-only Supabase-readiness prompt**,
+not the broader v18 master prompt. SQLite remains the default. The interrupted
+URL split, non-connecting parity script/CI gate and deployment audit survived;
+the source-byte regression now accepts both exact Git LF/CRLF representations.
+The SQLite implementation and PostgreSQL migration revision were not edited in
+this resumption. Existing encrypted-DAO changes predate this readiness checkpoint.
+
+Executed against the resumed source:
+
+- `DB_BACKEND` unset: full strict backend suite **1,110 passed / 3 skipped** in
+  666.81 seconds. Skips: optional SHAP and two credential-dependent live checks.
+- Readiness regression **12 passed**, including identical SQLite result bytes,
+  SQL traces and serialized database bytes despite future pooled/direct URLs.
+- Non-connecting DAO signature parity, required documents **22/22**, and dangling
+  references/import inventory passed. Method names/signatures match; partial
+  Postgres forecast persistence and behavioral/schema gaps are in `DEPLOYMENT.md`.
+- Frontend `npm run verify`: **192 tests passed**, generated client/honesty checks,
+  typecheck and production build passed; production and full npm audits: zero
+  known vulnerabilities. Python dependency audit: zero known vulnerabilities.
+- Mypy: **185 source files** passed. Bandit Medium/High gate passed. Critical
+  mutation controls passed and **3/3 intentional mutants were killed**.
+- Default development browser run: **19 passed / 1 failed** (passkey registration
+  did not navigate). Production build on isolated ports 8011/3011 with two workers,
+  matching the prior Windows verification setup: **20/20 passed**, including real
+  virtual passkey enrollment and login. Development-mode intermittency is still
+  recorded; no app behavior was changed to hide it.
+
+No live PostgreSQL/Supabase connection or migration was executed. The existing
+revision uses PostgreSQL-standard syntax, but flagged default-value/schema and
+DAO semantic gaps still require live-tested follow-up before any cutover.
+
+Delivery keeps exactly the refreshed `StockPilot-AI-v18-WINDOWS.zip` and unchanged
+older `StockPilot-AI-v18-CONTINUATION.zip` in the parent folder. The latest user
+request authorizes commit/push after local checks and release extraction checks,
+superseding the historical publication holds below.
+
+## Latest executed continuation — 2026-10-07
+
+This section supersedes historical totals/archive instructions below. The master
+prompt is **not fully complete**. This continuation closes specific gaps:
+
+- Directory uses actual TOTP/passkey storage; search, MFA, account age and
+  unacknowledged-login filters are exposed in `/operations`.
+- Single/bulk account actions share transactional session revocation, suspension,
+  reinstatement, lockout/MFA reset and per-account audit. Explicit nonblank reason
+  and existing single-use admin step-up are required; a failed batch rolls back.
+- Persistent regulatory checklist and version-specific acknowledgment directory
+  are exposed in `/operations`. Support is read-only; model operators have no
+  account/compliance access. Acknowledgments survive ordinary audit retention.
+- Sanitized queue console supports allowlisted manual triggers and failed-job
+  replay with step-up/justification. Celery replay restores args/kwargs correctly.
+- Travel detection compares account history across networks; stale devices are
+  flagged again, IPv6 prefixes canonicalized and arbitrary forwarded IPs ignored.
+- Passkey-only accounts require MFA. Cookies reach both factor routes; browser
+  enrollment/assertion and logout/login are verified with a virtual authenticator.
+- Logout clears the observed session result and in-flight private queries, fixing
+  immediate redirect back into a signed-in workspace.
+- Cached primary/comparison publication rechecks signed controls. Widening is
+  idempotent; adjusted coverage remains explicitly unverified, with low confidence
+  and stale derived zones/fan data withheld.
+- Browser tests have separate ports/build output. Production-browser execution
+  avoids observed OneDrive dev-manifest locks. Source-map dependency patched.
+
+Consolidated evidence: strict backend **1,098 passed / 3 skipped** (optional
+SHAP/live-market evidence); frontend **192 unit tests**, API/honesty gates,
+typecheck/build passed; full production browser suite **20 passed**, two workers,
+disposable encrypted backend on ports 8011/3011. Mypy **183 files** passed,
+doc/import/reference gates passed, critical mutations **3/3 killed** with passing
+controls, Bandit Medium/High gate passed. Production npm check: zero findings.
+
+Still outstanding: full shared PostgreSQL/SQLite/async repository adoption,
+complete multi-user Redis caching and durable forecast/retraining integration,
+complete PII/broker encryption and confirmed-device anomaly enforcement, all
+forecast canary controls, full ML registry/data-quality/drift/monitoring and
+Storybook integrations, broad mutation/full browser accessibility acceptance.
+Real held-out superiority/options/event evaluation, production-shape load/restart
+campaigns, hosted CI and independent penetration/regulatory review remain
+unverified. Local/synthetic test success cannot establish these requirements.
+
+Delivery: keep only newest `StockPilot-AI-v18-WINDOWS.zip` and unchanged old
+`StockPilot-AI-v18-CONTINUATION.zip` in the parent folder. Delete surplus REPAIRED
+archives only after replacement extraction checks pass. No commit or push until
+the user has personally run and audited the app.
+
+## Latest continuation — 2026-10-05
+
+This section supersedes the older handoff below. The complete master prompt
+remains **unfinished**. The Windows archives contain the updated local source;
+they are not a claim that every master-prompt acceptance condition is complete.
+
+Implemented in this continuation, with failing regression checks run first:
+
+- Production policy now validates every numeric policy field, enforces aggregate
+  sample minimums without double-counting an `overall` summary, fixes the coverage
+  target, and enforces requested MASE/interval-score improvement floors.
+- Revoked artifacts cannot be restored by rollback. Registry transactions
+  serialize manifest exports across processes; a failed export rolls back the
+  decision and preserves the previous active receipt. A crash between filesystem
+  export and database commit still fails closed; independent recovery/key rotation
+  and external signed-head anchoring remain open.
+- Sustained live-decay enforcement reads the actual automatic-settlement ledger,
+  uses signed tier backtest coverage and matching artifact/nominal metadata, and
+  widens after three disjoint 20-outcome windows below a ten-percentage-point
+  tolerance. Repeated evaluation of the same IDs cannot advance the counter.
+  Widening and per-tier operator pauses are persistent, signed and audited.
+  Primary and multi-horizon publication share the enforcement boundary. Control
+  changes invalidate forecast cache keys. Pauses publish abstention, not zero bounds.
+- Added configured `support-ops` and `model-ops` roles. Stored role and current
+  allowlist must agree. Model operators cannot access the account directory or
+  general admin mutations; support operators cannot modify models. The
+  `/operations` screen exposes verified history, rollback, tier pause/resume and
+  a read-only account directory with search/MFA filtering. Model mutations require
+  justification. Existing admin step-up controls are preserved.
+- Encrypted scheduled backups include the main database and promotion/control
+  sidecar. Every snapshot runs a hash/integrity restore drill; plaintext SQLite
+  drills restore only in memory. Retention runs only after successful drills.
+  APScheduler and Celery beat have backup entries. Queue-enabled deployments refuse
+  inline fallback when Celery/broker submission is unavailable.
+- Reused the existing command palette, adding keyboard focus trapping, a close
+  button and complete destination results. Added an accessible Motion/Framer Motion
+  uncertainty fan using only published horizon bounds, respecting reduced motion.
+  Diagnostic scores and cross-horizon agreement are no longer labeled calibrated
+  confidence. A standing lexical forecast-honesty gate supplements rendering tests.
+- Added aggregate Prometheus text exposition and a Compose monitoring overlay with
+  Prometheus/Grafana datasource provisioning. These configuration files have not
+  been executed here because Docker is unavailable. They do not complete OTEL/drift
+  dashboards or production infrastructure acceptance.
+
+### Current executed checks
+
+- Broad strict backend run: 1,082 passed, 3 skipped, with one reviewed API-surface
+  snapshot mismatch. After reviewing the six new routes and updating the snapshot,
+  63 focused contract/admin/role/decay/metrics tests passed. A final clean full run
+  is still required before claiming consolidated acceptance.
+- Frontend verify: generated client in sync, forecast-honesty gate, 191 unit tests,
+  TypeScript and production build passed. Production dependency audit: zero findings.
+- Mypy: 183 application files passed. Required documents and dangling references
+  passed. Critical mutations: 3/3 killed with passing unmutated controls.
+- Python installed-environment vulnerability audit: no known findings. Bandit
+  Medium/High gate passed with existing annotation-parsing notices.
+- Light/dark theme token contrast audit passed all declared pairings. The new fan
+  passes its component axe audit. This is not a full browser accessibility audit.
+- Browser suite: 18 passed, one session-loading failure under parallel load. The
+  isolated failing lifecycle test then passed. Consolidated browser rerun pending.
+
+### Still open, including implementation work
+
+Full shared PostgreSQL/SQLite repository adoption and async pooling, Redis coverage
+for all multi-user caches, comprehensive durable forecasting/retraining and queue
+operations, complete PII/broker field encryption and confirmed login anomalies,
+bulk account actions/filtering, feature-flag/compliance consoles, full monitoring,
+data-quality/ML registry integrations, Storybook/Chromatic, load/restart campaigns,
+broad mutmut, and full browser accessibility/mobile acceptance are not completed
+by these changes. Real per-tier market superiority/options/event benchmarks,
+external penetration testing and hosted CI require external evidence/access.
+
+Docker availability was checked directly: `docker` is not installed on this host.
+No commit, push, merge, publication or PR was performed.
+
+Delivery selection: refresh `StockPilot-AI-v18-WINDOWS.zip` and
+`StockPilot-AI-v18-WINDOWS-REPAIRED.zip`; retain the original
+`StockPilot-AI-v18-CONTINUATION.zip` as the old checkpoint. Remove only the surplus
+legacy ZIP after validating replacements. Preserve the active source directory.
+
 Date: 2026-10-04. Based on the latest `StockPilot-AI-v16` working copy and
 `C:\Users\khush\Downloads\StockPilot-AI_v18_MASTER_Prompt.md`.
 
@@ -89,6 +255,81 @@ this report supersedes them for this release.
 
 ## Master-prompt items still outstanding
 
+### Current local continuation
+
+The active working folder is `StockPilot-AI-v18`, on
+`feature/v18-comprehensive-updates`. No continuation changes have been committed
+or pushed. Existing implemented features are retained; the master prompt remains
+**in progress**, not complete.
+
+New regression tests were executed and failed before fixing:
+
+- Authentication ignored SQLCipher, and encrypted DAO/history reads used the
+  incompatible stdlib SQLite row factory. Connections and row factories now use
+  the actual driver. Registration, login, duplicate rejection, forecast-history
+  reads and pending-ledger reads are exercised against real encrypted storage.
+- Browser verification used personal account storage and could reuse running
+  servers. It now uses disposable encrypted databases and fresh credentials,
+  and refuses server reuse. This does not erase accounts created by older runs.
+- The import gate did not recognize a whole package lost to flattening and
+  accepted function-local definitions as module exports. Expected package roots
+  now come from the release inventory; installed Alembic remains external to its
+  migration workspace.
+- Failed extracted verification deleted the previous release ZIP. Candidate ZIPs
+  now replace the previous archive only after mandatory extraction checks pass.
+- Promotion accepted negative/infinite scores, invalid conditional coverage,
+  empty summaries and significant DM results in the wrong direction. Those
+  inputs now fail closed; the CLI carries the DM statistic through to the gate.
+- A nonconverged base member could still contribute to the forecast. It is now
+  excluded before evaluating the exact surviving blend with its baseline.
+
+The Tailwind 3 development chain and undici had audit findings. The CSS toolchain
+is now Tailwind 4.3.3, using the existing theme configuration. Light/dark utility
+styles have browser regression coverage. Full npm audits are mandatory in CI.
+The previously added GitPython runtime requirement was removed: that finding
+was from an unrelated globally installed Streamlit dependency, not this app.
+
+Executed evidence before final continuation checks: full strict backend run
+**1,031 passed / 2 skipped**; frontend **185 unit tests passed**, typecheck/build
+passed; upgraded browser suite **18 passed**, including theme checks;
+full npm audit **zero vulnerabilities**.
+
+Final consolidated local verification of these code changes:
+
+- Backend, warnings treated as errors: **1,049 passed, 2 skipped**, 401 seconds.
+- Browser tests on a fresh encrypted database: **18 passed**, with six workers,
+  including the CSS migration checks. No base-member convergence warning was
+  emitted in this final browser run.
+- Frontend unit tests: **185 passed**; generated API client, typecheck and
+  production build passed after the dependency migration.
+- Mypy: **182 application source files passed**.
+- Targeted mutation checks: **3/3 killed**, with unmutated controls passing.
+  This does not replace the unexecuted broad mutmut campaign.
+- Python installed-environment audit and full npm audit: **zero known findings**.
+- Bandit Medium/High gate, dangling references, required docs and diff whitespace
+  checks passed. Bandit emits existing annotation-parsing warnings.
+
+Release rebuilding uses mandatory inventory/secret checks, safe clean extraction,
+`import main` and four extracted smoke tests. Full extracted environment installs,
+frontend/backend suites, staging and hosted CI are not represented as completed.
+
+Docker is unavailable on this workstation, so production-shape staging,
+restart-durability and load evidence are still outstanding. Hosted CI on these
+local changes awaits later publication authorization. Real per-tier forecast
+superiority requires held-out market observations; synthetic tests cannot supply
+that evidence. Independent penetration testing requires an external engagement.
+
+### Signed registry handoff checkpoint
+
+The newer `forecasting/promotion_store.py` and `model_promotion.py` changes add
+signed manifests, a chained append-only decision registry, candidate rollback
+without evidence-date renewal, future-date rejection and audited CLI revocation.
+Focused security/promotion tests passed **17 tests**; mypy passed **183 files**.
+The full suite and release
+acceptance for this addition are not implied by the earlier checkpoint numbers.
+Read `CONTINUATION_PROMPT.md` for exact files, remaining integration work,
+verification status and the external WORM-anchor limitation.
+
 | Section | Remaining acceptance work |
 | --- | --- |
 | 1 — foundation | Full-repository mypy and strict warning-as-error local tests pass. An actual GitHub runner, the broad mutmut campaign and production-shape staging still require executed evidence. |
@@ -104,7 +345,12 @@ CQR control-arm boundaries and point-in-time requirements remain mandatory.
 
 ## Local files and archives
 
-The newest project is retained as `StockPilot-AI-v18`, with a new sanitized
-`StockPilot-AI-v18-WINDOWS.zip`. The previous newest ZIP is retained for rollback.
-Private configuration and databases are excluded from release ZIPs. Older-folder
-unique local files must be preserved before removing that obsolete working copy.
+The active project is `StockPilot-AI-v18`. Requested archive refresh targets in
+the parent `stock` folder are `StockPilot-AI-v18-WINDOWS.zip` and the legacy-named
+`StockPilot-AI-v16-WINDOWS-REPAIRED.zip`. The additional
+`StockPilot-AI-v18-WINDOWS-REPAIRED.zip` created during the prior continuation is
+also refreshed. All three targets package the current **v18** folder; the v16
+filename is retained only to match the user's existing archive target and is
+not a claim that the content remains v16. These are sanitized work-in-progress
+snapshots, not completion of the master prompt. Private configurations, keys and
+user databases remain excluded. Failed verification preserves the previous ZIP.

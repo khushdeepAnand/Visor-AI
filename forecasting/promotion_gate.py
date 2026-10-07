@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import math
 from typing import Any, Sequence
 
 import numpy as np
@@ -61,6 +62,10 @@ def check_coverage_gate(
     tolerance: float,
 ) -> tuple[bool, str]:
     """Check if empirical coverage is within tolerance of target."""
+    if not (math.isfinite(empirical_coverage) and 0 <= empirical_coverage <= 1
+            and math.isfinite(target_coverage) and 0 < target_coverage < 1
+            and math.isfinite(tolerance) and 0 <= tolerance < 1):
+        return False, "Invalid coverage evidence or policy; promotion blocked"
     gap = empirical_coverage - target_coverage
     passed = abs(gap) <= tolerance
     if passed:
@@ -74,6 +79,8 @@ def check_mase_gate(
     max_mase: float,
 ) -> tuple[bool, str]:
     """Check MASE gate - model must not be worse than naive."""
+    if not (math.isfinite(mase) and mase >= 0 and math.isfinite(max_mase) and max_mase >= 0):
+        return False, "Invalid MASE evidence; promotion blocked"
     passed = mase <= max_mase + 1e-10
     if passed:
         return True, f"MASE {mase:.4f} ≤ {max_mase:.2f} (not worse than naive)"
@@ -89,10 +96,14 @@ def check_winkler_gate(
 ) -> tuple[bool, str]:
     """Check if model's Winkler score significantly improves on baseline.
 
-    Uses a paired t-test on the Winkler score components (width + penalties).
+    This checks score direction only; statistical significance is checked using
+    the separate paired-loss Diebold-Mariano gate, never inferred from means.
     """
-    if baseline_winkler <= 0:
+    if not math.isfinite(baseline_winkler) or baseline_winkler <= 0:
         return False, "No valid baseline Winkler score; promotion blocked"
+
+    if not math.isfinite(model_winkler) or model_winkler < 0:
+        return False, "Invalid model Winkler score; promotion blocked"
 
     improvement = (baseline_winkler - model_winkler) / baseline_winkler
     # Simplified: require at least some improvement
@@ -112,12 +123,20 @@ def check_diebold_mariano_gate(
     if dm_result is None:
         return False, "No Diebold-Mariano test available; promotion blocked"
 
-    passed = dm_result.reject_null and dm_result.p_value < significance
+    statistic = getattr(dm_result, "dm_statistic", None)
+    p_value = getattr(dm_result, "p_value", None)
+    if not (isinstance(statistic, (int, float)) and math.isfinite(statistic)
+            and isinstance(p_value, (int, float)) and math.isfinite(p_value)
+            and 0 <= p_value <= 1 and math.isfinite(significance) and 0 < significance < 1):
+        return False, "Invalid or missing directional Diebold-Mariano evidence; promotion blocked"
+    # The harness defines d = candidate loss - baseline loss. Rejecting equal
+    # accuracy in the opposite direction is evidence AGAINST promotion.
+    passed = bool(dm_result.reject_null) and statistic < 0 and p_value < significance
 
     if passed:
-        return True, f"DM test: p={dm_result.p_value:.4f} < {significance} (rejects equal accuracy)"
+        return True, f"DM test: p={p_value:.4f} < {significance} (rejects equal accuracy in favour of candidate)"
     else:
-        return False, f"DM test: p={dm_result.p_value:.4f} ≥ {significance} (cannot reject equal accuracy)"
+        return False, f"DM test: p={p_value:.4f}, statistic={statistic:.4f} (cannot reject equal accuracy in favour of candidate)"
 
 
 def check_conditional_coverage_gate(
@@ -131,6 +150,9 @@ def check_conditional_coverage_gate(
 
     failed = []
     for key, cov in conditional_coverage.items():
+        if not math.isfinite(cov) or not 0 <= cov <= 1:
+            failed.append(f"{key}: invalid coverage evidence")
+            continue
         if key == "overall":
             continue
         gap = abs(cov - target_coverage)
@@ -208,12 +230,13 @@ def run_promotion_gate(
     details["coverage"] = msg
 
     # 3. MASE gate
-    passed, msg = check_mase_gate(mase, cfg.max_mase)
+    passed, msg = check_mase_gate(mase, min(cfg.max_mase, 1 - cfg.min_mase_improvement))
     checks["mase"] = passed
     details["mase"] = msg
 
     # 4. Winkler/Interval score gate
     passed, msg = check_winkler_gate(model_winkler, baseline_winkler, cfg.winkler_significance, n_forecasts)
+    passed = passed and model_winkler <= baseline_winkler * (1 - cfg.min_winkler_improvement) + 1e-10
     checks["winkler"] = passed
     details["winkler"] = msg
 
@@ -278,7 +301,7 @@ def run_all_tier_gates(
         results[tier] = run_promotion_gate(
             tier=tier,
             empirical_coverage=getattr(eval_result, 'coverage', 0.0),
-            target_coverage=getattr(eval_result, 'target_coverage', cfg.target_coverage),
+            target_coverage=cfg.target_coverage,
             mase=getattr(eval_result, 'mase', 1.0),
             model_winkler=getattr(eval_result, 'winkler_score', 0.0),
             baseline_winkler=float(baseline_winkler) if baseline_winkler is not None else 0.0,
@@ -303,7 +326,7 @@ def promotion_gate_summary(
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "tiers_total": tiers_total,
         "tiers_passed": tiers_passed,
-        "overall_passed": tiers_passed == tiers_total,
+        "overall_passed": tiers_total > 0 and tiers_passed == tiers_total,
         "tier_results": {
             tier: {
                 "passed": result.passed,

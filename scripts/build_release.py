@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+import uuid
 from pathlib import Path
 
 if __package__ in {None, ""}:
@@ -147,6 +148,10 @@ def build(
             )
 
     output.parent.mkdir(parents=True, exist_ok=True)
+    release_destination = output
+    # Publish atomically only AFTER extracted verification; a rejected candidate
+    # must never remove the last working release ZIP.
+    output = release_destination.with_name(f".{release_destination.name}.{uuid.uuid4().hex}.tmp.zip")
     with tempfile.TemporaryDirectory(prefix="stockpilot-release-", dir=output.parent) as temporary:
         staged_root = Path(temporary) / PROJECT_FOLDER
         for source in files:
@@ -205,7 +210,13 @@ def build(
         raise
 
     digest = hashlib.sha256(output.read_bytes()).hexdigest()
-    return len(files), output.stat().st_size, digest
+    size = output.stat().st_size
+    try:
+        os.replace(output, release_destination)
+    except OSError:
+        output.unlink(missing_ok=True)
+        raise
+    return len(files), size, digest
 
 
 def main() -> int:

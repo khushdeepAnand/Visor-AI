@@ -2,9 +2,94 @@
 
 from fastapi import APIRouter
 from api.deps import *  # noqa: F401,F403
+from api.routers.admin import require_support_ops
+from services.admin_registry import apply_account_actions
 
 
 router = APIRouter()
+
+
+class BulkAccountPayload(BaseModel):
+    model_config = {"str_strip_whitespace": True}
+    account_ids: list[int] = Field(min_length=1, max_length=100)
+    action: Literal["suspend", "reinstate", "force_logout", "reset_lockout", "force_mfa_reset"]
+    reason: str = Field(min_length=12, max_length=160)
+
+
+@router.post("/api/v1/admin/accounts/bulk")
+def bulk_account_endpoint(payload: BulkAccountPayload, admin: dict[str, Any] = Depends(require_admin),
+                          step_up_token: str | None = Header(default=None, alias="X-Step-Up-Token")) -> dict[str, Any]:
+    ids = sorted(set(payload.account_ids))
+    target = f"accounts:{payload.action}:" + ",".join(map(str, ids))
+    _require_step_up(admin, "admin_change", target, step_up_token)
+    try:
+        return apply_account_actions(ids, payload.action, actor_id=int(admin["id"]), actor_email=str(admin["email"]), reason=payload.reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+class ComplianceReviewPayload(BaseModel):
+    model_config = {"str_strip_whitespace": True}
+    status: Literal["open", "in_progress", "complete", "blocked"]
+    note: str = Field(min_length=12, max_length=500)
+
+
+@router.get("/api/v1/admin/compliance")
+def compliance_operations_endpoint(limit: int = Query(100, ge=1, le=200),
+                                   user: dict[str, Any] = Depends(require_support_ops)) -> dict[str, Any]:
+    from services.compliance import review_checklist, acknowledgment_directory, RESEARCH_ACKNOWLEDGMENT_VERSION
+    return {"version": RESEARCH_ACKNOWLEDGMENT_VERSION, "checklist": review_checklist(), "accounts": acknowledgment_directory(limit)}
+
+
+@router.put("/api/v1/admin/compliance/{item_id}")
+def compliance_update_endpoint(item_id: str, payload: ComplianceReviewPayload,
+                               user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    from services.compliance import update_review_item, review_checklist
+    try:
+        update_review_item(item_id, status=payload.status, note=payload.note, actor_id=int(user["id"]), actor_email=str(user["email"]))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"checklist": review_checklist()}
+
+
+class QueueActionPayload(BaseModel):
+    model_config = {"str_strip_whitespace": True}
+    reason: str = Field(min_length=12, max_length=160)
+
+
+@router.get("/api/v1/admin/queue")
+def queue_operations_endpoint(admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    from services.task_queue import operation_snapshot
+    return operation_snapshot()
+
+
+@router.post("/api/v1/admin/queue/trigger/{name}", status_code=202)
+def queue_trigger_endpoint(name: str, payload: QueueActionPayload, admin: dict[str, Any] = Depends(require_admin),
+                           step_up_token: str | None = Header(default=None, alias="X-Step-Up-Token")) -> dict[str, Any]:
+    from services.task_queue import submit
+    tasks = {"retention": "run_retention", "instruments": "refresh_instruments", "backups": "backup_databases", "decay": "enforce_decay"}
+    if name not in tasks:
+        raise HTTPException(status_code=422, detail="Unknown scheduled task")
+    _require_step_up(admin, "admin_change", f"queue:trigger:{name}", step_up_token)
+    result = submit(f"services.task_queue.tasks.{tasks[name]}")
+    record_admin_action(actor_id=admin.get("id"), actor_email=admin.get("email"), action="queue_trigger",
+                        target=name, outcome=str(result.get("mode")), detail={"reason": payload.reason})
+    if result.get("mode") not in {"queued", "inline"}:
+        raise HTTPException(status_code=503, detail="Job submission failed; inspect queue health")
+    return {"mode": result["mode"], "task_id": result.get("task_id")}
+
+
+@router.post("/api/v1/admin/queue/replay/{entry_id}")
+def queue_replay_endpoint(entry_id: str, payload: QueueActionPayload, admin: dict[str, Any] = Depends(require_admin),
+                          step_up_token: str | None = Header(default=None, alias="X-Step-Up-Token")) -> dict[str, Any]:
+    from services.task_queue import replay_dead_letter
+    _require_step_up(admin, "admin_change", f"queue:replay:{entry_id}", step_up_token)
+    replayed = replay_dead_letter(entry_id)
+    record_admin_action(actor_id=admin.get("id"), actor_email=admin.get("email"), action="queue_replay",
+                        target=entry_id, outcome="ok" if replayed else "failed", detail={"reason": payload.reason})
+    if not replayed:
+        raise HTTPException(status_code=409, detail="Replay unavailable; the entry is missing or submission failed")
+    return {"replayed": True}
 
 
 
