@@ -9,10 +9,12 @@ import hmac
 import os
 import re
 import secrets
-import sqlite3
+import database
+from database import DATABASE_ERRORS, INTEGRITY_ERRORS, OPERATIONAL_ERRORS
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from contextlib import contextmanager
 
 bcrypt: Any = None
 try:
@@ -28,7 +30,8 @@ except ImportError:  # Standard-library scrypt remains available offline.
 
 BASE_DIR = Path(__file__).resolve().parent
 
-DATABASE_PATH = BASE_DIR / "database" / "stockpilot.db"
+DATABASE_PATH = Path(database.DATABASE)
+
 
 
 # ==========================================================
@@ -65,21 +68,23 @@ def get_connection():
     Create and return a connection to the StockPilot database.
     """
 
-    DATABASE_PATH.parent.mkdir(
-        parents=True,
-        exist_ok=True
-    )
+    return database._open_connection(DATABASE_PATH)
 
-    connection = sqlite3.connect(
-        DATABASE_PATH,
-        timeout=30
-    )
 
-    connection.execute("PRAGMA foreign_keys = ON")
-    connection.execute("PRAGMA journal_mode = WAL")
-    connection.execute("PRAGMA busy_timeout = 30000")
-
-    return connection
+@contextmanager
+def _auth_database():
+    """Use the existing selected abstraction; retain the local path test seam."""
+    if database.postgres_selected():
+        from services.db.factory import dao_session
+        with dao_session() as factory:
+            yield factory.db
+    else:
+        from services.db.sqlite_impl import SQLiteDatabase
+        db = SQLiteDatabase(get_connection())
+        try:
+            yield db
+        finally:
+            db.close()
 
 
 # ==========================================================
@@ -392,108 +397,26 @@ def register_user(
     if not valid:
         return False, message
 
-    connection = None
-
     try:
-        connection = get_connection()
-        cursor = connection.cursor()
-
-        cursor.execute(
-            """
-            SELECT id
-            FROM users
-            WHERE LOWER(email) = ?
-            """,
-            (
-                normalized_email,
-            )
-        )
-
-        existing_user = cursor.fetchone()
-
-        if existing_user:
-            return (
-                False,
-                "An account with this email already exists."
-            )
-
-        hashed_password = hash_password(
-            password
-        )
-
-        cursor.execute(
-            """
-            INSERT INTO users(
-                name,
-                email,
-                password,
-                date_of_birth
-            )
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                normalized_name,
-                normalized_email,
-                hashed_password,
-                str(date_of_birth or "").strip()
-            )
-        )
-
-        user_id = cursor.lastrowid
-
-        # Create default user settings when the settings table
-        # is available. This keeps registration compatible with
-        # databases created before the settings feature.
-        try:
-            cursor.execute(
-                """
-                INSERT OR IGNORE INTO settings(
-                    user_id,
-                    theme,
-                    currency,
-                    default_period
-                )
-                VALUES (?, ?, ?, ?)
-                """,
-                (
-                    user_id,
-                    "Dark",
-                    "₹",
-                    "1y"
-                )
-            )
-
-        except sqlite3.OperationalError:
-            pass
-
-        connection.commit()
-
-        return (
-            True,
-            "Registration successful. You can now log in."
-        )
-
-    except sqlite3.IntegrityError:
-        if connection is not None:
-            connection.rollback()
-
-        return (
-            False,
-            "An account with this email already exists."
-        )
-
-    except sqlite3.Error:
-        if connection is not None:
-            connection.rollback()
-
-        return (
-            False,
-            "Registration could not be completed. Please try again."
-        )
-
-    finally:
-        if connection is not None:
-            connection.close()
+        with _auth_database() as db:
+            db.begin_write("identity:" + normalized_email)
+            if db.fetchone(db.sql("SELECT id FROM users WHERE LOWER(email)=?"), (normalized_email,)):
+                return False, "An account with this email already exists."
+            cursor = db.execute(db.sql("INSERT INTO users(name,email,password,date_of_birth) VALUES(?,?,?,?) RETURNING id"),
+                                (normalized_name, normalized_email, hash_password(password), str(date_of_birth or "").strip()))
+            user_id = cursor.fetchone()["id"]
+            try:
+                db.execute(db.sql("INSERT INTO settings(user_id,theme,currency,default_period) VALUES(?,?,?,?) ON CONFLICT(user_id) DO NOTHING"),
+                           (user_id, "Dark", "₹", "1y"))
+            except OPERATIONAL_ERRORS:
+                if database.postgres_selected():
+                    raise  # Selected PG requires its migrated schema; no partial success.
+            db.commit()
+            return True, "Registration successful. You can now log in."
+    except INTEGRITY_ERRORS:
+        return False, "An account with this email already exists."
+    except DATABASE_ERRORS:
+        return False, "Registration could not be completed. Please try again."
 
 
 # ==========================================================
@@ -516,20 +439,19 @@ def _parse_utc(value):
         return None
 
 
-def _login_lock_status(cursor, identifier):
-    cursor.execute(
+def _login_lock_status(db, identifier):
+    row = db.fetchone(db.sql(
         """
         SELECT failed_count, window_started, locked_until
         FROM auth_login_attempts
         WHERE identifier = ?
-        """,
+        """),
         (identifier,),
     )
-    row = cursor.fetchone()
     if not row:
         return False, 0
 
-    locked_until = _parse_utc(row[2])
+    locked_until = _parse_utc(row["locked_until"])
     now = _utc_now()
     if locked_until and locked_until > now:
         remaining = max(1, int((locked_until - now).total_seconds() // 60) + 1)
@@ -537,29 +459,28 @@ def _login_lock_status(cursor, identifier):
     return False, 0
 
 
-def _record_failed_login(cursor, identifier):
+def _record_failed_login(db, identifier):
     now = _utc_now()
-    cursor.execute(
+    row = db.fetchone(db.sql(
         """
         SELECT failed_count, window_started
         FROM auth_login_attempts
         WHERE identifier = ?
-        """,
+        """),
         (identifier,),
     )
-    row = cursor.fetchone()
-    window_started = _parse_utc(row[1]) if row else None
+    window_started = _parse_utc(row["window_started"]) if row else None
     if not row or not window_started or now - window_started > timedelta(minutes=LOGIN_WINDOW_MINUTES):
         failed_count = 1
         window_started = now
     else:
-        failed_count = int(row[0] or 0) + 1
+        failed_count = int(row["failed_count"] or 0) + 1
 
     locked_until = None
     if failed_count >= MAX_FAILED_ATTEMPTS:
         locked_until = now + timedelta(minutes=LOCKOUT_MINUTES)
 
-    cursor.execute(
+    db.execute(db.sql(
         """
         INSERT INTO auth_login_attempts(
             identifier, failed_count, window_started, locked_until, updated_at
@@ -569,7 +490,7 @@ def _record_failed_login(cursor, identifier):
             window_started = excluded.window_started,
             locked_until = excluded.locked_until,
             updated_at = excluded.updated_at
-        """,
+        """),
         (
             identifier,
             failed_count,
@@ -581,8 +502,8 @@ def _record_failed_login(cursor, identifier):
     return locked_until is not None
 
 
-def _clear_failed_logins(cursor, identifier):
-    cursor.execute("DELETE FROM auth_login_attempts WHERE identifier = ?", (identifier,))
+def _clear_failed_logins(db, identifier):
+    db.execute(db.sql("DELETE FROM auth_login_attempts WHERE identifier = ?"), (identifier,))
 
 
 # ==========================================================
@@ -599,59 +520,32 @@ def login_user(email, password):
     if password is None or not str(password):
         return False, "Password is required."
 
-    connection = None
     try:
-        connection = get_connection()
-        cursor = connection.cursor()
-
-        locked, remaining = _login_lock_status(cursor, normalized_email)
-        if locked:
-            return False, f"Too many failed attempts. Try again in {remaining} minute(s)."
-
-        cursor.execute(
-            """
-            SELECT id, name, email, password
-            FROM users
-            WHERE LOWER(email) = ?
-            LIMIT 1
-            """,
-            (normalized_email,),
-        )
-        user = cursor.fetchone()
-
-        oauth_account = user is not None and str(user[3] or "") in {
-            OAUTH_PASSWORD_MARKER,
-            APPLE_OAUTH_PASSWORD_MARKER,
-        }
-        selected_hash = user[3] if user is not None and not oauth_account else DUMMY_PASSWORD_HASH
-        password_matches = verify_password(password, selected_hash)
-        if oauth_account:
-            password_matches = False
-
-        if user is None or not password_matches:
-            now_locked = _record_failed_login(cursor, normalized_email)
-            connection.commit()
-            if now_locked:
-                return False, f"Too many failed attempts. Try again in {LOCKOUT_MINUTES} minute(s)."
+        with _auth_database() as db:
+            db.begin_write("identity:" + normalized_email)
+            locked, remaining = _login_lock_status(db, normalized_email)
+            if locked:
+                return False, f"Too many failed attempts. Try again in {remaining} minute(s)."
+            user = db.fetchone(db.sql("SELECT id,name,email,password FROM users WHERE LOWER(email)=? LIMIT 1"), (normalized_email,))
+            oauth_account = user is not None and str(user["password"] or "") in {OAUTH_PASSWORD_MARKER, APPLE_OAUTH_PASSWORD_MARKER}
+            selected_hash = user["password"] if user is not None and not oauth_account else DUMMY_PASSWORD_HASH
+            password_matches = verify_password(password, selected_hash)
             if oauth_account:
-                return False, "This account uses external sign-in. Select its connected provider."
-            return False, "Invalid email or password."
-
-        _clear_failed_logins(cursor, normalized_email)
-        cursor.execute(
-            "UPDATE users SET last_login_at = ? WHERE id = ?",
-            (_utc_now().isoformat(), user[0]),
-        )
-        connection.commit()
-        return True, {"id": user[0], "name": user[1], "email": user[2]}
-
-    except sqlite3.Error:
-        if connection is not None:
-            connection.rollback()
+                password_matches = False
+            if user is None or not password_matches:
+                now_locked = _record_failed_login(db, normalized_email)
+                db.commit()
+                if now_locked:
+                    return False, f"Too many failed attempts. Try again in {LOCKOUT_MINUTES} minute(s)."
+                if oauth_account:
+                    return False, "This account uses external sign-in. Select its connected provider."
+                return False, "Invalid email or password."
+            _clear_failed_logins(db, normalized_email)
+            db.execute(db.sql("UPDATE users SET last_login_at=? WHERE id=?"), (_utc_now().isoformat(), user["id"]))
+            db.commit()
+            return True, {"id": user["id"], "name": user["name"], "email": user["email"]}
+    except DATABASE_ERRORS:
         return False, "Unable to access your account. Please try again."
-    finally:
-        if connection is not None:
-            connection.close()
 
 
 # ==========================================================
@@ -666,41 +560,23 @@ def issue_password_reset_token(email):
     if not valid:
         return None
 
-    connection = None
     try:
-        connection = get_connection()
-        cursor = connection.cursor()
-        cursor.execute(
-            "SELECT id FROM users WHERE LOWER(email) = ? LIMIT 1",
-            (normalized_email,),
-        )
-        user = cursor.fetchone()
-        if not user:
-            return None
-
-        raw_token = secrets.token_urlsafe(32)
-        token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
-        expires_at = (_utc_now() + timedelta(minutes=PASSWORD_RESET_MINUTES)).isoformat()
-        cursor.execute(
-            "UPDATE password_reset_tokens SET used_at = ? WHERE user_id = ? AND used_at IS NULL",
-            (_utc_now().isoformat(), user[0]),
-        )
-        cursor.execute(
-            """
-            INSERT INTO password_reset_tokens(user_id, token_hash, expires_at)
-            VALUES (?, ?, ?)
-            """,
-            (user[0], token_hash, expires_at),
-        )
-        connection.commit()
-        return raw_token
-    except sqlite3.Error:
-        if connection is not None:
-            connection.rollback()
+        with _auth_database() as db:
+            db.begin_write("identity:" + normalized_email)
+            user = db.fetchone(db.sql("SELECT id FROM users WHERE LOWER(email)=? LIMIT 1"), (normalized_email,))
+            if not user:
+                return None
+            raw_token = secrets.token_urlsafe(32)
+            token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+            expires_at = (_utc_now() + timedelta(minutes=PASSWORD_RESET_MINUTES)).isoformat()
+            db.execute(db.sql("UPDATE password_reset_tokens SET used_at=? WHERE user_id=? AND used_at IS NULL"),
+                       (_utc_now().isoformat(), user["id"]))
+            db.execute(db.sql("INSERT INTO password_reset_tokens(user_id,token_hash,expires_at) VALUES(?,?,?)"),
+                       (user["id"], token_hash, expires_at))
+            db.commit()
+            return raw_token
+    except DATABASE_ERRORS:
         return None
-    finally:
-        if connection is not None:
-            connection.close()
 
 
 def request_password_reset(email, send_function=None):
@@ -725,47 +601,25 @@ def reset_password(token, new_password):
         return False, "A valid reset token is required."
 
     token_hash = hashlib.sha256(str(token).strip().encode("utf-8")).hexdigest()
-    connection = None
     try:
-        connection = get_connection()
-        cursor = connection.cursor()
-        cursor.execute(
-            """
-            SELECT id, user_id, expires_at, used_at
-            FROM password_reset_tokens
-            WHERE token_hash = ?
-            LIMIT 1
-            """,
-            (token_hash,),
-        )
-        row = cursor.fetchone()
-        if not row or row[3] is not None:
-            return False, "The reset link is invalid or has already been used."
-        expires_at = _parse_utc(row[2])
-        if not expires_at or expires_at <= _utc_now():
-            return False, "The reset link has expired. Request a new one."
-
-        cursor.execute(
-            "UPDATE users SET password = ? WHERE id = ?",
-            (hash_password(new_password), row[1]),
-        )
-        cursor.execute(
-            "UPDATE password_reset_tokens SET used_at = ? WHERE id = ?",
-            (_utc_now().isoformat(), row[0]),
-        )
-        cursor.execute(
-            "DELETE FROM auth_login_attempts WHERE identifier = (SELECT LOWER(email) FROM users WHERE id = ?)",
-            (row[1],),
-        )
-        connection.commit()
-        return True, "Password updated successfully. You can now sign in."
-    except sqlite3.Error:
-        if connection is not None:
-            connection.rollback()
+        with _auth_database() as db:
+            db.begin_write("reset-token:" + token_hash)
+            query = "SELECT id,user_id,expires_at,used_at FROM password_reset_tokens WHERE token_hash=? LIMIT 1"
+            if database.postgres_selected():
+                query += " FOR UPDATE"
+            row = db.fetchone(db.sql(query), (token_hash,))
+            if not row or row["used_at"] is not None:
+                return False, "The reset link is invalid or has already been used."
+            expires_at = _parse_utc(row["expires_at"])
+            if not expires_at or expires_at <= _utc_now():
+                return False, "The reset link has expired. Request a new one."
+            db.execute(db.sql("UPDATE users SET password=? WHERE id=?"), (hash_password(new_password), row["user_id"]))
+            db.execute(db.sql("UPDATE password_reset_tokens SET used_at=? WHERE id=?"), (_utc_now().isoformat(), row["id"]))
+            db.execute(db.sql("DELETE FROM auth_login_attempts WHERE identifier=(SELECT LOWER(email) FROM users WHERE id=?)"), (row["user_id"],))
+            db.commit()
+            return True, "Password updated successfully. You can now sign in."
+    except DATABASE_ERRORS:
         return False, "Password reset could not be completed. Please try again."
-    finally:
-        if connection is not None:
-            connection.close()
 
 
 # ==========================================================
@@ -779,74 +633,35 @@ def get_user_by_id(user_id):
     This helper does not expose the password hash.
     """
 
-    connection = None
-
     try:
-        connection = get_connection()
-        cursor = connection.cursor()
-
-        cursor.execute(
-            """
-            SELECT
-                id,
-                name,
-                email,
-                created_at,
-                COALESCE(role, 'user'),
-                COALESCE(auth_provider, 'password'),
-                COALESCE(token_version, 0),
-                COALESCE(account_status, 'active')
-            FROM users
-            WHERE id = ?
-            LIMIT 1
-            """,
-            (
-                user_id,
-            )
-        )
-
-        user = cursor.fetchone()
-
-        if user is None:
-            return None
-
-        try:
-            providers = [
-                str(row[0])
-                for row in cursor.execute(
-                    "SELECT provider FROM oauth_identities WHERE user_id=? ORDER BY provider",
-                    (user_id,),
-                ).fetchall()
-            ]
-        except sqlite3.OperationalError:
-            providers = [part for part in str(user[5] or "").split("+") if part in {"google", "apple"}]
-        try:
-            mfa_row = cursor.execute(
-                "SELECT enabled FROM user_mfa WHERE user_id=?",
-                (user_id,),
-            ).fetchone()
-            mfa_enabled = bool(mfa_row and mfa_row[0])
-        except sqlite3.OperationalError:
-            mfa_enabled = False
-        return {
-            "id": user[0],
-            "name": user[1],
-            "email": user[2],
-            "created_at": user[3],
-            "role": str(user[4] or "user").strip().lower() or "user",
-            "auth_provider": str(user[5] or "password"),
-            "connected_providers": providers,
-            "token_version": int(user[6] or 0),
-            "account_status": str(user[7] or "active"),
-            "mfa_enabled": mfa_enabled,
-        }
-
-    except sqlite3.Error:
+        with _auth_database() as db:
+            user = db.fetchone(db.sql("""SELECT id,name,email,created_at,COALESCE(role,'user') AS role,
+                COALESCE(auth_provider,'password') AS auth_provider,COALESCE(token_version,0) AS token_version,
+                COALESCE(account_status,'active') AS account_status FROM users WHERE id=? LIMIT 1"""), (user_id,))
+            if user is None:
+                return None
+            try:
+                providers = [str(row["provider"]) for row in db.fetchall(db.sql("SELECT provider FROM oauth_identities WHERE user_id=? ORDER BY provider"), (user_id,))]
+            except OPERATIONAL_ERRORS:
+                if database.postgres_selected():
+                    raise
+                providers = [part for part in str(user["auth_provider"] or "").split("+") if part in {"google", "apple"}]
+            try:
+                mfa_row = db.fetchone(db.sql("SELECT enabled FROM user_mfa WHERE user_id=?"), (user_id,))
+                mfa_enabled = bool(mfa_row and mfa_row["enabled"])
+            except OPERATIONAL_ERRORS:
+                if database.postgres_selected():
+                    raise
+                mfa_enabled = False
+            return {
+                "id": user["id"], "name": user["name"], "email": user["email"], "created_at": user["created_at"],
+                "role": str(user["role"] or "user").strip().lower() or "user",
+                "auth_provider": str(user["auth_provider"] or "password"), "connected_providers": providers,
+                "token_version": int(user["token_version"] or 0), "account_status": str(user["account_status"] or "active"),
+                "mfa_enabled": mfa_enabled,
+            }
+    except DATABASE_ERRORS:
         return None
-
-    finally:
-        if connection is not None:
-            connection.close()
 
 # ==========================================================
 # GOOGLE OAUTH ACCOUNT LINKING
@@ -897,98 +712,58 @@ def login_or_register_oauth_user(
     if not subject:
         return False, "The identity provider did not return an account subject.", "error"
 
-    connection = None
     try:
-        connection = get_connection()
-        cursor = connection.cursor()
-        cursor.execute(
-            """
-            SELECT u.id, u.name, u.email, u.role
-            FROM oauth_identities oi JOIN users u ON u.id=oi.user_id
-            WHERE oi.provider=? AND oi.provider_subject=? LIMIT 1
-            """,
-            (normalized_provider, subject),
-        )
-        identity_user = cursor.fetchone()
-        if identity_user is not None:
-            cursor.execute(
-                "UPDATE oauth_identities SET last_login_at=?, verified_email=? WHERE provider=? AND provider_subject=?",
-                (_utc_now().isoformat(), normalized_email, normalized_provider, subject),
-            )
-            cursor.execute("UPDATE users SET last_login_at=? WHERE id=?", (_utc_now().isoformat(), identity_user[0]))
-            connection.commit()
-            return True, {
-                "id": identity_user[0], "name": identity_user[1], "email": identity_user[2],
-                "role": str(identity_user[3] or "user"),
-            }, "existing"
-
-        cursor.execute(
-            "SELECT id,name,email,password,auth_provider,google_id,role FROM users WHERE LOWER(email)=? LIMIT 1",
-            (normalized_email,),
-        )
-        user = cursor.fetchone()
-        action = "linked"
-        if user is None:
-            marker = OAUTH_PASSWORD_MARKER if normalized_provider == "google" else APPLE_OAUTH_PASSWORD_MARKER
-            cursor.execute(
-                "INSERT INTO users(name,email,password,auth_provider) VALUES(?,?,?,?)",
-                (normalized_name, normalized_email, marker, normalized_provider),
-            )
-            user_id = int(cursor.lastrowid)
-            user = (user_id, normalized_name, normalized_email, marker, normalized_provider, None, "user")
-            action = "created"
-            try:
-                cursor.execute(
-                    "INSERT OR IGNORE INTO settings(user_id,theme,currency,default_period) VALUES(?,'Dark','₹','1y')",
-                    (user_id,),
-                )
-            except sqlite3.OperationalError:
-                pass
-
-        user_id = int(user[0])
-        cursor.execute(
-            "SELECT provider_subject FROM oauth_identities WHERE user_id=? AND provider=? LIMIT 1",
-            (user_id, normalized_provider),
-        )
-        existing = cursor.fetchone()
-        if existing is not None and str(existing[0]) != subject:
-            connection.rollback()
-            return False, "This account is already linked to a different provider identity.", "error"
-
-        cursor.execute(
-            """
-            INSERT INTO oauth_identities(user_id,provider,provider_subject,verified_email,last_login_at)
-            VALUES(?,?,?,?,?)
-            """,
-            (user_id, normalized_provider, subject, normalized_email, _utc_now().isoformat()),
-        )
-        providers = {part for part in str(user[4] or "password").split("+") if part}
-        providers.add(normalized_provider)
-        auth_provider = "+".join(sorted(providers - {"password"})) if str(user[3]) in {
-            OAUTH_PASSWORD_MARKER, APPLE_OAUTH_PASSWORD_MARKER,
-        } else "+".join(["password", *sorted(providers - {"password"})])
-        if normalized_provider == "google":
-            cursor.execute(
-                "UPDATE users SET google_id=?,auth_provider=?,last_login_at=? WHERE id=?",
-                (subject, auth_provider, _utc_now().isoformat(), user_id),
-            )
-        else:
-            cursor.execute(
-                "UPDATE users SET auth_provider=?,last_login_at=? WHERE id=?",
-                (auth_provider, _utc_now().isoformat(), user_id),
-            )
-        connection.commit()
-        return True, {
-            "id": user_id, "name": user[1], "email": user[2], "role": str(user[6] or "user"),
-        }, action
-    except sqlite3.IntegrityError:
-        if connection is not None:
-            connection.rollback()
+        with _auth_database() as db:
+            db.begin_write("identity:" + normalized_email)
+            # All identity writers acquire the email key first, then the immutable
+            # provider-subject key. Unique constraints are the final race guard.
+            db.begin_write("oauth:" + normalized_provider + ":" + subject)
+            identity_user = db.fetchone(db.sql("""SELECT u.id,u.name,u.email,u.role
+                FROM oauth_identities oi JOIN users u ON u.id=oi.user_id
+                WHERE oi.provider=? AND oi.provider_subject=? LIMIT 1"""), (normalized_provider, subject))
+            if identity_user is not None:
+                db.execute(db.sql("UPDATE oauth_identities SET last_login_at=?,verified_email=? WHERE provider=? AND provider_subject=?"),
+                           (_utc_now().isoformat(), normalized_email, normalized_provider, subject))
+                db.execute(db.sql("UPDATE users SET last_login_at=? WHERE id=?"), (_utc_now().isoformat(), identity_user["id"]))
+                db.commit()
+                return True, {"id": identity_user["id"], "name": identity_user["name"], "email": identity_user["email"],
+                              "role": str(identity_user["role"] or "user")}, "existing"
+            user = db.fetchone(db.sql("SELECT id,name,email,password,auth_provider,google_id,role FROM users WHERE LOWER(email)=? LIMIT 1"), (normalized_email,))
+            action = "linked"
+            if user is None:
+                marker = OAUTH_PASSWORD_MARKER if normalized_provider == "google" else APPLE_OAUTH_PASSWORD_MARKER
+                cursor = db.execute(db.sql("INSERT INTO users(name,email,password,auth_provider) VALUES(?,?,?,?) RETURNING id"),
+                                    (normalized_name, normalized_email, marker, normalized_provider))
+                user_id = int(cursor.fetchone()["id"])
+                user = {"id": user_id, "name": normalized_name, "email": normalized_email, "password": marker,
+                        "auth_provider": normalized_provider, "google_id": None, "role": "user"}
+                action = "created"
+                try:
+                    db.execute(db.sql("INSERT INTO settings(user_id,theme,currency,default_period) VALUES(?,'Dark','₹','1y') ON CONFLICT(user_id) DO NOTHING"), (user_id,))
+                except OPERATIONAL_ERRORS:
+                    if database.postgres_selected():
+                        raise
+            user_id = int(user["id"])
+            existing = db.fetchone(db.sql("SELECT provider_subject FROM oauth_identities WHERE user_id=? AND provider=? LIMIT 1"), (user_id, normalized_provider))
+            if existing is not None and str(existing["provider_subject"]) != subject:
+                db.rollback()
+                return False, "This account is already linked to a different provider identity.", "error"
+            db.execute(db.sql("INSERT INTO oauth_identities(user_id,provider,provider_subject,verified_email,last_login_at) VALUES(?,?,?,?,?)"),
+                       (user_id, normalized_provider, subject, normalized_email, _utc_now().isoformat()))
+            providers = {part for part in str(user["auth_provider"] or "password").split("+") if part}
+            providers.add(normalized_provider)
+            auth_provider = "+".join(sorted(providers - {"password"})) if str(user["password"]) in {
+                OAUTH_PASSWORD_MARKER, APPLE_OAUTH_PASSWORD_MARKER,
+            } else "+".join(["password", *sorted(providers - {"password"})])
+            if normalized_provider == "google":
+                db.execute(db.sql("UPDATE users SET google_id=?,auth_provider=?,last_login_at=? WHERE id=?"),
+                           (subject, auth_provider, _utc_now().isoformat(), user_id))
+            else:
+                db.execute(db.sql("UPDATE users SET auth_provider=?,last_login_at=? WHERE id=?"),
+                           (auth_provider, _utc_now().isoformat(), user_id))
+            db.commit()
+            return True, {"id": user_id, "name": user["name"], "email": user["email"], "role": str(user["role"] or "user")}, action
+    except INTEGRITY_ERRORS:
         return False, "This provider identity could not be linked safely.", "error"
-    except sqlite3.Error:
-        if connection is not None:
-            connection.rollback()
+    except DATABASE_ERRORS:
         return False, "External sign-in could not access the user account.", "error"
-    finally:
-        if connection is not None:
-            connection.close()

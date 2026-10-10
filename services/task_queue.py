@@ -70,6 +70,8 @@ if _queue_enabled():
             beat_schedule={
                 "daily-retention": {"task": "services.task_queue.tasks.run_retention", "schedule": 86400.0},
                 "daily-instruments": {"task": "services.task_queue.tasks.refresh_instruments", "schedule": 86400.0},
+                "daily-encrypted-backups": {"task": "services.task_queue.tasks.backup_databases", "schedule": 86400.0},
+                "tier-live-decay": {"task": "services.task_queue.tasks.enforce_decay", "schedule": 1800.0},
             },
             task_default_queue="default",
             task_routes={
@@ -145,7 +147,11 @@ def replay_dead_letter(entry_id: str) -> bool:
         for idx, raw in enumerate(entries):
             entry = json.loads(raw)
             if entry.get("id") == entry_id:
-                result = submit(entry.get("task", ""), entry.get("payload"))
+                payload = entry.get("payload") or {}
+                if set(payload) == {"args", "kwargs"}:
+                    result = submit(entry.get("task", ""), payload["kwargs"], *payload["args"])
+                else:
+                    result = submit(entry.get("task", ""), payload)
                 if result.get("mode") not in {"queued", "inline"}:
                     return False
                 client.lrem(DLQ_KEY, 1, raw)
@@ -209,14 +215,16 @@ def submit(task_name: str, payload: dict[str, Any] | None = None, *args: Any, **
         return {"mode": "dlq", "error": "task not registered"}
 
     payload = payload or {}
+    if _queue_enabled() and (not _celery_available or celery_app is None):
+        return {"mode": "unavailable", "error": "Configured durable queue is unavailable", "retryable": True}
 
     if _celery_available and celery_app is not None:
         try:
             async_result = celery_app.send_task(task_name, args=(*args,), kwargs={**payload, **kwargs})
             return {"mode": "queued", "task_id": async_result.id}
         except Exception as exc:
-            # Broker down -> fall through to inline so the user still gets work done.
-            logger.warning("Broker unavailable (%s); executing inline.", exc)
+            logger.warning("Broker unavailable (%s); durable submission refused.", type(exc).__name__)
+            return {"mode": "unavailable", "error": "Durable task submission failed", "retryable": True}
 
     # Inline execution with retry + DLQ.
     max_retries = int(os.getenv("STOCKPILOT_TASK_MAX_RETRIES", "3"))
@@ -256,6 +264,19 @@ def queue_stats() -> dict[str, Any]:
     }
 
 
+def operation_snapshot(limit: int = 50) -> dict[str, Any]:
+    """Operator metadata only. User task payloads, errors and traces stay private."""
+    entries = get_dead_letters(limit)
+    schedules = []
+    if celery_app is not None:
+        schedules = [{"name": name, "task": entry["task"], "interval_seconds": entry["schedule"]}
+                     for name, entry in celery_app.conf.beat_schedule.items()]
+    return {"health": queue_stats(),
+            "dead_letters": [{key: row.get(key) for key in ("id", "task", "queue", "failed_at", "attempts")} for row in entries],
+            "schedules": schedules,
+            "schedule_note": "Intervals are configured beat schedules; next-run times require the running beat scheduler."}
+
+
 # ---------------------------------------------------------------------
 # Built-in tasks
 # ---------------------------------------------------------------------
@@ -279,3 +300,17 @@ def run_retention() -> dict[str, Any]:
     """Run the data-retention sweep."""
     from services.retention import run_retention_enforcement
     return run_retention_enforcement()
+
+
+@task("services.task_queue.tasks.backup_databases")
+def backup_databases_task() -> dict[str, Any]:
+    from scheduler import backup_databases
+    backup_databases()
+    return {"restore_drill_verified": True}
+
+
+@task("services.task_queue.tasks.enforce_decay")
+def enforce_decay_task() -> dict[str, Any]:
+    from database import get_settled_rows_for_quality
+    from forecasting.live_decay import enforce_tier_decay
+    return {"actions": enforce_tier_decay(get_settled_rows_for_quality(limit=10000))}

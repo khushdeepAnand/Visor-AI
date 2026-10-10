@@ -21,6 +21,7 @@ ROLLBACK_RUNBOOK.md
 REGULATORY_REVIEW_REQUIRED.md
 UPGRADE_VERIFICATION.md
 V18_IMPLEMENTATION_STATUS.md
+CONTINUATION_PROMPT.md
 REFERENCE_RECONCILIATION.md
 SECURITY.md
 SECURITY_GOVERNANCE.md
@@ -72,6 +73,8 @@ Dockerfile
 Dockerfile.api
 docker-compose.yml
 docker-compose.staging.yml
+docker-compose.monitoring.yml
+docs/monitoring/**
 pyproject.toml
 pytest.ini
 mypy.ini
@@ -98,6 +101,16 @@ docs/AUDIT_2026-10-04.md
 docs/MODEL_UPGRADE_RESEARCH.md
 docs/prediction-engine.md
 docs/model-evaluation.md
+docs/NEXT_DAY_SPECIALIST.md
+docs/next-day-held-out-report.json
+docs/history-manifest.json
+docs/*-verified-daily.csv
+docs/repository-load-report.json
+docs/mlflow-registry-report.json
+docs/V21_CONTINUATION_STATUS.md
+docs/SUPABASE_INTEGRATION_STATUS.md
+docs/supabase-source-inventory.json
+docs/EXTERNAL_PEN_TEST_ENGAGEMENT.md
 docs/data-pipeline.md
 docs/ARCHITECTURE_FLOW.md
 UPGRADE_PLAN.md

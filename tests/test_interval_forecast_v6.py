@@ -76,6 +76,9 @@ def test_range_model_beats_naive_on_fixed_predictable_fold():
     assert result["validation"]["evaluated_prediction"] == "published_blended_prediction"
     assert result["methods"]["quantile_regression"]["families"] == []
     assert result["methods"]["quantile_regression"]["request_fit"] is False
+    assert result["next_day_evidence"]["available"] is True
+    assert result["next_day_evidence"]["calibration"]["samples"] == validation["samples"]
+    assert result["next_day_evidence"]["specialist_status"] == "research_only_pending_next_day_promotion"
 
 
 @pytest.mark.live

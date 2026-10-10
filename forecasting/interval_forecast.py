@@ -684,9 +684,19 @@ class _EtsRegressor:
 
 
 def _fit_base_models(X: pd.DataFrame, y: pd.Series, *, low_data: bool = False) -> dict[str, Any]:
+    from sklearn.exceptions import ConvergenceWarning
     # Reuse the established model implementations instead of re-deriving them.
     names = ["Linear Regression", "ElasticNet", "Random Forest", "Gradient Boosting"]
-    models = {name: legacy_models._train_model_by_name(name, X, y) for name in names}
+    models = {}
+    for name in names:
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", ConvergenceWarning)
+                models[name] = legacy_models._train_model_by_name(name, X, y)
+        except ConvergenceWarning:
+            # An unoptimised member is not evidence. Remaining members and the
+            # persistence anchor are evaluated as the exact published blend.
+            continue
     models["Naive Persistence"] = _PersistenceRegressor()
 
     # Low-data runs join the classical challengers the research recommends for
@@ -1609,6 +1619,13 @@ def _run_horizon(
         "cal_scores": cal_scores.tolist() if isinstance(cal_scores, np.ndarray) else cal_scores,
         "cal_scales": cal_scales.tolist() if isinstance(cal_scales, np.ndarray) else cal_scales,
         "X_cal_index": X_cal.index.tolist(),
+        # Internal replay evidence for paired research comparisons; never serialized
+        # wholesale into the public forecast contract.
+        "test_index": X_test.index.tolist(),
+        "test_actual": actual,
+        "test_median": blended_test,
+        "test_low": final_low_test,
+        "test_high": final_high_test,
     }
 
 
@@ -2416,6 +2433,15 @@ def forecast_range(
         "disclaimer": "Research and paper-trading simulation only; not investment advice.",
     }
 
+    payload["next_day_evidence"] = {
+        "available": 1 in runs and resolved_timeframe == "1D",
+        "published_model": "existing_direct_horizon_pipeline",
+        "specialist_status": "research_only_pending_next_day_promotion",
+        "evidence_grade": runs[1]["sufficiency"].evidence_grade if 1 in runs and resolved_timeframe == "1D" else "none",
+        "calibration": runs[1]["metrics"].to_dict() if 1 in runs and resolved_timeframe == "1D" else None,
+        "basis": "Untouched horizon=1 test fold; intraday next-bar evidence is not next-session evidence.",
+    }
+
     # v14 context is optional and additive. Provider calls only occur when a
     # caller explicitly supplies a loader; ordinary forecasts remain offline.
     context = collect_context(
@@ -2512,8 +2538,10 @@ def forecast_range(
         enhanced["context_inputs"] = payload["context_inputs"]
         enhanced["context_metrics"] = payload["context_metrics"]
         enhanced["lineage"] = payload["lineage"]
-        return enhanced
+        from forecasting.live_decay import apply_tier_controls
+        return apply_tier_controls(enhanced)
     except Exception as exc:
         # v13 enhancements are best-effort; never break the core forecast
         payload["enhancement_status"] = {"status": "degraded", "reason": type(exc).__name__}
-        return payload
+        from forecasting.live_decay import apply_tier_controls
+        return apply_tier_controls(payload)

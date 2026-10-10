@@ -45,7 +45,7 @@ type AuthValue = {
 export const SESSION_QUERY_KEY = ["me"] as const;
 
 /** Query keys holding data that belongs to the signed-in user. */
-const USER_SCOPED_KEYS = ["me", "portfolio", "watchlist", "market-workspace-watchlist", "alerts", "paper", "predictions", "journal", "audit", "replay", "sessions"];
+const USER_SCOPED_KEYS = ["portfolio", "watchlist", "market-workspace-watchlist", "alerts", "paper", "predictions", "journal", "audit", "replay", "sessions", "operations-models", "operations-users", "passkeys", "mfa-status", "compliance-operations", "queue-operations"];
 
 const AuthContext = createContext<AuthValue | null>(null);
 
@@ -53,7 +53,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: SESSION_QUERY_KEY,
-    queryFn: () => api<{ user: SessionUser }>("/api/v1/auth/me"),
+    queryFn: () => api<{ user: SessionUser | null }>("/api/v1/auth/me"),
     retry: (attempt, error) => {
       // A 401 is a final answer, not a transient failure. Retrying it would
       // delay the sign-in prompt; retrying a network or 5xx error is useful.
@@ -75,7 +75,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } finally {
       // Clearing runs even when the request is rejected, so the browser never
       // keeps another account's portfolio, watchlist or orders on screen.
-      queryClient.setQueryData(SESSION_QUERY_KEY, undefined);
+      await queryClient.cancelQueries();
+      // Undefined is a no-op in setQueryData. Removing an observed query also
+      // leaves its previous result alive until a re-fetch: both could redirect
+      // the login page back to a signed-in workspace immediately after logout.
+      queryClient.setQueryData(SESSION_QUERY_KEY, { user: null });
       for (const key of USER_SCOPED_KEYS) {
         queryClient.removeQueries({ queryKey: [key] });
       }

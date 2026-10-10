@@ -4,9 +4,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Button } from "./ui/button";
 import { inr } from "@/lib/utils";
 import { MarketSourceLabel } from "@/components/MarketContext";
+import { ForecastFan } from "@/components/ForecastFan";
 
 const stateDetails: Record<ForecastSupportState, { label: string; tone: string; explanation: string; icon: typeof ShieldCheck | typeof CircleSlash2 | typeof TriangleAlert | typeof Clock3 | typeof Database | typeof MinusCircle }> = {
-  model_supported: { label: "Model supported", tone: "border-gain/35 bg-gain/5 text-gain", explanation: "The range was produced by a calibrated model that passed its promotion gate.", icon: ShieldCheck },
+   model_supported: { label: "Model supported", tone: "border-gain/35 bg-gain/5 text-gain", explanation: "The untouched chronological test reports skill against persistence. Future performance remains uncertain.", icon: ShieldCheck },
   baseline_only: { label: "Baseline only", tone: "border-warning/35 bg-warning/5 text-warning", explanation: "A calibrated model is unavailable; only a naive persistence baseline was published.", icon: CircleSlash2 },
   low_evidence: { label: "Low evidence", tone: "border-warning/35 bg-warning/5 text-warning", explanation: "Insufficient history or calibration data to promote a model for this symbol.", icon: TriangleAlert },
   drift_blocked: { label: "Drift blocked", tone: "border-loss/35 bg-loss/5 text-loss", explanation: "A promoted model showed performance drift and was blocked from publishing.", icon: MinusCircle },
@@ -149,9 +150,10 @@ function AssessmentSection({ data }: { data: Forecast }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 id="assessment-title" className="text-xs font-semibold uppercase tracking-[.16em] text-slate-400">Model assessment</h3>
         {confidence && (
-          <span className="text-xs text-slate-400">Confidence <b className="tabular text-base text-white">{confidence.score}/100</b> <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${confidence.level === "high" ? "bg-gain/15 text-gain" : confidence.level === "moderate" ? "bg-warning/15 text-warning" : "bg-loss/15 text-loss"}`}>{confidence.level}</span></span>
+          <span className="text-xs text-slate-400">Evidence diagnostic <b className="tabular text-base text-white">{confidence.score}/100</b> <span className="text-[10px]">{confidence.level}</span></span>
         )}
       </div>
+      {confidence && <p className="mt-2 text-xs text-slate-400">This diagnostic summarizes evidence checks. It is not a calibrated probability of accuracy or profit.</p>}
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
         <Stat label="Expected move" value={a.expected_return_pct != null ? `${a.expected_return_pct >= 0 ? "+" : ""}${a.expected_return_pct.toFixed(2)}%` : "–"} />
         <Stat label="Expected volatility" value={a.expected_volatility_pct != null ? `±${a.expected_volatility_pct.toFixed(2)}%` : "–"} />
@@ -251,6 +253,7 @@ export function ForecastCard({ data, loading, error, onRetry, retrainedAt }: { d
             )}
 
             <AssessmentSection data={data} />
+            {range && data.reference_price != null && <ForecastFan current={data.reference_price} points={data.horizons?.filter(entry => !entry.abstained && entry.forecast).map(entry => ({ sessions: entry.sessions, low: entry.forecast!.low, median: entry.forecast!.median_reference, high: entry.forecast!.high, nominal: entry.forecast!.confidence_level })) ?? [{ sessions: data.horizon?.bars ?? 1, low: range.low, median: range.median_reference, high: range.high, nominal: range.confidence_level }]} />}
 
             {data.horizons && data.horizons.length > 0 && (
               <section className="mt-5" aria-labelledby="horizon-ladder-title">
@@ -287,11 +290,11 @@ export function ForecastCard({ data, loading, error, onRetry, retrainedAt }: { d
                 {data.horizon_consistency && (
                   <div className={`mt-3 rounded-lg border p-3 ${data.horizon_consistency.level === "high" ? "border-gain/25 bg-gain/5" : data.horizon_consistency.level === "low" ? "border-loss/25 bg-loss/5" : "border-warning/25 bg-warning/5"}`}>
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <h4 className="text-[11px] font-semibold uppercase tracking-wide text-slate-300">Cross-horizon confidence</h4>
+                      <h4 className="text-[11px] font-semibold uppercase tracking-wide text-slate-300">Cross-horizon consistency</h4>
                       <span className="tabular text-[10px] text-slate-400">{data.horizon_consistency.score == null ? "Unavailable" : `${data.horizon_consistency.score}/100 · ${data.horizon_consistency.level}`}</span>
                     </div>
                     <p className="mt-1 text-[11px] leading-4 text-slate-400">{data.horizon_consistency.summary}</p>
-                    <p className="mt-1 text-[10px] leading-4 text-slate-500">Consistency is a confidence signal only; no corridor is adjusted or hidden.</p>
+                    <p className="mt-1 text-[10px] leading-4 text-slate-500">Consistency measures agreement between horizons, not forecast accuracy; no corridor is adjusted or hidden.</p>
                   </div>
                 )}
               </section>

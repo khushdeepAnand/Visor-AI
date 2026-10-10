@@ -1,6 +1,6 @@
 # Threat Model
 
-Version: 1.0, reviewed 2026-09-27. Scope: local Windows research and paper-trading release.
+Version: 1.1, reviewed 2026-10-07. Scope: local Windows research and paper-trading release.
 
 ## Security Objectives
 
@@ -23,7 +23,7 @@ Version: 1.0, reviewed 2026-09-27. Scope: local Windows research and paper-tradi
 
 | Threat | Representative abuse | Controls | Residual risk / next review trigger |
 | --- | --- | --- | --- |
-| Spoofing | Stolen password/session, OAuth callback forgery | bcrypt/scrypt, lockout, OIDC state/nonce, TOTP/recovery codes, hashed server-side JTI, token version | Passkeys and new-device email confirmation are not shipped |
+| Spoofing | Stolen password/session, OAuth callback forgery | bcrypt/scrypt, lockout, OIDC state/nonce, TOTP/recovery/passkeys, hashed JTI, token version | Confirmed-device anomaly enforcement remains open |
 | Tampering | Forged user IDs, modified cookies, archive alteration | User ID derived from authenticated session, ownership predicates, signed JWT, CSRF Origin checks, release inventory and SHA-256 evidence | Local administrator/malware can alter unencrypted SQLite |
 | Repudiation | User/admin denies sensitive action | User and admin audit logs, versioned acknowledgment, session records, bounded retention | Local logs are not immutable or externally timestamped |
 | Information disclosure | Secret, raw IP, PII, provider body, TOTP leak | DPAPI, encrypted TOTP secret, keyed recovery hashes, coarse session labels, sanitized errors/logs, secret scanner | Memory/process inspection by same-account malware remains possible |
@@ -40,3 +40,42 @@ Version: 1.0, reviewed 2026-09-27. Scope: local Windows research and paper-tradi
 ## Review Process
 
 Security review is required for authentication changes, new persisted sensitive fields, provider integrations, external network listeners, release-input changes, and retention-policy changes. Findings and acceptance owners are recorded in `SECURITY_GOVERNANCE.md`; legal/regulatory approval remains separate.
+# Continuation data-flow review — 2026-10-05
+
+New flows: authenticated model operators write signed tier-control state and
+append-only control events in the promotion sidecar; the forecast publication
+boundary reads verified state and abstains on unavailable integrity. Support
+operators read bounded account metadata through a dedicated directory endpoint,
+without portfolios, credentials or account mutation permissions. Both stored
+roles and current deployment allowlists authorize these paths.
+
+Encrypted scheduled backups now include the sidecar. Restore drills authenticate
+and verify each snapshot before retention removes older copies. Backup and audit
+keys must be provisioned persistently; loss/rotation and off-host recovery need
+operator-managed procedures. HMAC and application triggers do not defeat a
+database owner deleting the entire registry or control history. External WORM or
+independently signed-head anchoring remains an open security requirement.
+
+The public Prometheus endpoint exports aggregate counters/duration only, without
+user paths, IDs, symbols, credentials or model artifacts. Restrict the monitoring
+stack to a trusted network; its Compose ports bind to localhost. Monitoring
+containers and independent penetration testing have not been executed here.
+
+## Data-flow review — 2026-10-07
+
+Passkey creation/assertion crosses the browser authenticator boundary. Challenge,
+RP/origin, account ownership and signature verification precede session creation;
+passkey-only accounts cannot bypass MFA. Challenge storage is still in-process
+and needs shared persistence for multi-worker scale. Cookies cover both factors.
+
+Bulk account controls require configured admin role, step-up and explicit reason;
+state/audit writes are transactional. Support is read-only and model operators
+cannot see account/compliance records. Queue views whitelist metadata, excluding
+job arguments, traces and raw errors. Replay preserves original argument shapes.
+
+Disclosure acknowledgments survive audit expiry but are erased with the account.
+Checklist edits and audit records commit together; independent reviews still need
+actual external evidence. Geolocation uses the resolved request client rather than
+arbitrary forwarded headers; device identity remains a coarse UA/network heuristic.
+Cached forecast publication rechecks signed controls without mutating cache data
+or compounding widening.

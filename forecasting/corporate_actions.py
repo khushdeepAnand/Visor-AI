@@ -132,7 +132,10 @@ def _adjust_for_rights(frame: pd.DataFrame, action: CorporateAction) -> pd.DataF
     ex_ts = pd.Timestamp(action.ex_date)
     pre_mask = adjusted.index < ex_ts
     # TERP adjustment factor
-    factor = 1.0 / (1.0 + action.rights_ratio)
+    reference = float(adjusted.loc[pre_mask, "Close"].iloc[-1]) if pre_mask.any() else 0.0
+    if reference <= 0:
+        return adjusted
+    factor = (reference + action.rights_ratio * action.rights_price) / (reference * (1.0 + action.rights_ratio))
     for col in ["Open", "High", "Low", "Close"]:
         if col in adjusted.columns:
             adjusted.loc[pre_mask, col] = adjusted.loc[pre_mask, col] * factor
@@ -232,6 +235,15 @@ def apply_corporate_actions(
 
     for action in actions_to_apply:
         try:
+            required = {
+                CorporateActionType.SPLIT: (action.ratio_numerator, action.ratio_denominator),
+                CorporateActionType.BONUS: (action.bonus_ratio,),
+                CorporateActionType.RIGHTS: (action.rights_ratio, action.rights_price),
+                CorporateActionType.DIVIDEND: (action.dividend_per_share,),
+            }.get(action.action_type, ())
+            if any(value is None or not np.isfinite(value) or value <= 0 for value in required):
+                warnings.append(f"Withheld {action.action_type.value} on {action.ex_date}: invalid or missing terms")
+                continue
             action_symbol = str(action.symbol or "").strip().upper()
             if action_symbol and action_symbol != requested_symbol:
                 warnings.append(f"Skipped {action.action_type.value} for {action_symbol}: symbol mismatch for {requested_symbol}")
@@ -278,6 +290,7 @@ def verify_adjustment_correctness(
     symbol: str,
     *,
     known_actions: list[CorporateAction] | None = None,
+    already_adjusted: bool = False,
 ) -> dict[str, Any]:
     """Verify that corporate actions are correctly adjusted.
 
@@ -291,11 +304,18 @@ def verify_adjustment_correctness(
         return {"verified": True, "checks": [], "message": "No known actions to verify"}
 
     result = apply_corporate_actions(frame, symbol, actions=actions)
-    adjusted = result.adjusted_frame
+    adjusted = frame if already_adjusted else result.adjusted_frame
+    if result.warnings or len(result.actions_applied) != len(actions):
+        return {"verified": False, "checks": [], "message": "Action application incomplete", "warnings": result.warnings}
 
     checks: list[dict[str, Any]] = []
     for action in actions:
         ex_date = pd.Timestamp(action.ex_date)
+        index = pd.DatetimeIndex(adjusted.index)
+        if index.tz is not None:
+            ex_date = ex_date.tz_localize(index.tz)
+        if ex_date < adjusted.index.min() or ex_date > adjusted.index.max():
+            continue
         # Find closest trading day to ex-date
         if len(adjusted) == 0:
             continue
@@ -331,7 +351,8 @@ def verify_adjustment_correctness(
                     "acceptable": abs(vol_ratio - expected_ratio) < 0.2,
                 })
 
-    all_ok = all(c.get("acceptable", True) for c in checks)
+    in_range = [a for a in actions if adjusted.index.min().date() < a.ex_date <= adjusted.index.max().date()]
+    all_ok = all(c.get("acceptable", True) for c in checks) and (not in_range or bool(checks))
     return {
         "verified": all_ok,
         "checks": checks,

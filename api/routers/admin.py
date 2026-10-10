@@ -2,9 +2,102 @@
 
 from fastapi import APIRouter
 from api.deps import *  # noqa: F401,F403
+from services.admin_registry import effective_role, bootstrap_operational_roles, apply_account_actions
+from forecasting.model_promotion import manifest_status, promotion_history, rollback_promotion
+from forecasting.live_decay import tier_controls, set_tier_pause
 
 
 router = APIRouter()
+
+
+def require_model_ops(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    if effective_role(user) not in {"admin", "model-ops"}:
+        raise HTTPException(status_code=403, detail="Model operations role required")
+    return user
+
+
+def require_support_ops(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    if effective_role(user) not in {"admin", "support-ops"}:
+        raise HTTPException(status_code=403, detail="Support operations role required")
+    return user
+
+
+class ModelRollbackPayload(BaseModel):
+    candidate_id: str = Field(min_length=1, max_length=120)
+    reason: str = Field(min_length=12, max_length=500)
+
+
+class TierPausePayload(BaseModel):
+    tier: Literal["T0", "T1", "T2", "T3", "T4"]
+    paused: bool
+    reason: str = Field(min_length=12, max_length=500)
+
+
+@router.get("/api/v1/admin/model-operations")
+def model_operations_endpoint(user: dict[str, Any] = Depends(require_model_ops)) -> dict[str, Any]:
+    del user
+    try:
+        return {"status": manifest_status(), "history": promotion_history(), "controls": tier_controls()}
+    except (RuntimeError, ValueError, OSError) as exc:
+        raise HTTPException(status_code=503, detail="Model registry integrity unavailable") from exc
+
+
+@router.post("/api/v1/admin/model-operations/rollback")
+def model_rollback_endpoint(payload: ModelRollbackPayload, user: dict[str, Any] = Depends(require_model_ops)) -> dict[str, Any]:
+    try:
+        return {"receipt": rollback_promotion(payload.candidate_id, actor=str(user["id"]), reason=payload.reason)}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (RuntimeError, OSError) as exc:
+        raise HTTPException(status_code=503, detail="Model registry unavailable") from exc
+
+
+@router.put("/api/v1/admin/model-operations/pause")
+def tier_pause_endpoint(payload: TierPausePayload, user: dict[str, Any] = Depends(require_model_ops)) -> dict[str, Any]:
+    try:
+        set_tier_pause(payload.tier, paused=payload.paused, actor=str(user["id"]), reason=payload.reason)
+        return {"controls": tier_controls()}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (RuntimeError, OSError) as exc:
+        raise HTTPException(status_code=503, detail="Model controls unavailable") from exc
+
+
+@router.get("/api/v1/admin/users")
+def user_directory_endpoint(search: str = Query("", max_length=120), mfa: bool | None = None,
+                            limit: int = Query(50, ge=1, le=200),
+                            user: dict[str, Any] = Depends(require_support_ops),
+                            min_age_days: int | None = Query(None, ge=0, le=36500),
+                            anomalous: bool | None = None) -> dict[str, Any]:
+    del user
+    conn = get_connection()
+    try:
+        from services.login_anomaly import _ensure_tables
+        _ensure_tables()
+        from services.webauthn import _ensure_table
+        _ensure_table()
+        rows = conn.execute("""SELECT * FROM (
+            SELECT u.id,u.name,u.email,u.created_at,u.account_status,
+              (EXISTS(SELECT 1 FROM user_mfa m WHERE m.user_id=u.id AND m.enabled=1)
+               OR EXISTS(SELECT 1 FROM webauthn_credentials w WHERE w.user_id=u.id)) AS mfa_enabled,u.role,
+              EXISTS(SELECT 1 FROM login_anomalies a WHERE a.user_id=u.id AND a.acknowledged_at IS NULL) AS anomalous_login
+            FROM users u) WHERE (LOWER(email) LIKE ? OR LOWER(name) LIKE ?)
+            AND (? IS NULL OR mfa_enabled=?)
+            AND (? IS NULL OR julianday('now')-julianday(created_at)>=?)
+            AND (? IS NULL OR anomalous_login=?) ORDER BY id DESC LIMIT ?""",
+            (f"%{search.lower()}%", f"%{search.lower()}%", mfa, mfa, min_age_days, min_age_days, anomalous, anomalous, limit)).fetchall()
+        return {"items": [dict(zip(("id", "name", "email", "created_at", "account_status", "mfa_enabled", "role", "anomalous_login"), row)) for row in rows]}
+    finally:
+        conn.close()
+
+
+@router.post("/api/v1/admin/operational-roles/bootstrap")
+def operational_bootstrap_endpoint(user: dict[str, Any] = Depends(require_admin),
+                                   step_up_token: str | None = Header(default=None, alias="X-Step-Up-Token")) -> dict[str, Any]:
+    _require_step_up(user, "admin_change", "operational-roles", step_up_token)
+    result = bootstrap_operational_roles()
+    record_admin_action(actor_id=user.get("id"), actor_email=user.get("email"), action="operational_roles_bootstrap")
+    return result
 
 
 
@@ -304,33 +397,15 @@ def admin_account_lifecycle_endpoint(
     )
     user_id = payload.account_id
     action = payload.action
-    connection = get_connection()
     try:
-        row = connection.execute("SELECT email FROM users WHERE id=?", (int(user_id),)).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="Account not found.")
-        if action == "suspend":
-            connection.execute("UPDATE users SET account_status='suspended', token_version=token_version+1 WHERE id=?", (int(user_id),))
-            connection.execute("UPDATE auth_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE user_id=? AND revoked_at IS NULL", (int(user_id),))
-        elif action == "reinstate":
-            connection.execute("UPDATE users SET account_status='active' WHERE id=?", (int(user_id),))
-        elif action == "force_logout":
-            connection.execute("UPDATE users SET token_version=token_version+1 WHERE id=?", (int(user_id),))
-            connection.execute("UPDATE auth_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE user_id=? AND revoked_at IS NULL", (int(user_id),))
-        else:
-            connection.execute("DELETE FROM auth_login_attempts WHERE identifier=LOWER(?)", (str(row[0]),))
-        connection.commit()
-    finally:
-        connection.close()
-    record_admin_action(
-        actor_id=admin.get("id"), actor_email=admin.get("email"), action=f"account:{action}",
-        target=f"user:{int(user_id)}", outcome="ok", detail={"reason": payload.reason},
-    )
+        apply_account_actions([user_id], action, actor_id=int(admin["id"]), actor_email=str(admin["email"]), reason=payload.reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"updated": True, "action": action, "user_id": int(user_id)}
 
 
 @router.get("/api/v1/admin/audit")
-def admin_audit_endpoint(limit: int = Query(100, ge=1, le=1000), admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+def admin_audit_endpoint(limit: int = Query(100, ge=1, le=1000), admin: dict[str, Any] = Depends(require_support_ops)) -> dict[str, Any]:
     del admin
     return _serializable({"items": admin_audit_events(limit)})
 

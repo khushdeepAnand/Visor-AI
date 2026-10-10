@@ -1,5 +1,239 @@
 # StockPilot AI — Deployment Guide
 
+## Current integration checkpoint — 2026-10-10 (partial, no cutover)
+
+This section supersedes the historical prepare-only assessment below. The
+PostgreSQL DAO and schema now have real disposable PostgreSQL evidence. **The
+application-wide PostgreSQL adoption is not complete and this is not a
+production-ready Supabase release.** Keep `DB_BACKEND=sqlite` for the application.
+
+- SQLite remains the default even if any database URL, including the legacy
+  `STOCKPILOT_DATABASE_URL`, is present. Explicit selectors alone choose a backend.
+- Legacy portfolio/watchlist/transaction reads and writes, prediction save/read,
+  range snapshot save/read and audit helpers have begun shared-DAO adoption.
+  Password/OIDC, JWT sessions, MFA, passkeys and login devices now have live
+  PostgreSQL persistence/crypto checks. Admin/trading/settlement/retention and
+  other application paths are still outstanding; see the detailed status report.
+- Selecting PostgreSQL refuses access to the main application SQLite file.
+  This prevents a misleading cloud selection from silently writing locally.
+  Explicit local sidecars remain supported. Startup is intentionally blocked
+  until the remaining application adoption is completed and verified.
+- Head `20261010_02` matches all 42 eager/lazy runtime tables and columns in
+  disposable live parity. Forward migrations correct future timestamp/JSON
+  defaults and add case-insensitive watchlist uniqueness without deleting rows.
+- The driver is synchronous `psycopg2`; SQLAlchemy is explicitly pinned to its
+  dialect even under 2.1. No asyncpg statement cache or prepared statements are
+  introduced. UTC is set transaction-locally for Supavisor compatibility.
+
+### Supabase project and backend-only configuration
+
+Create/select the owner-managed Asia-Pacific project. Keep Data API enabled,
+auto-expose-new-tables disabled, and auto-RLS-for-new-tables enabled. Use the
+dashboard Connect panel to obtain its actual pooled application URL and direct
+PostgreSQL migration URL. The migration runner rejects port 6543 and known
+`*.pooler.supabase.com` endpoints. Use an IPv6-capable migration runner if the
+direct endpoint requires IPv6. A session pooler is not treated as a direct URL.
+
+Windows, from the project directory (hidden-input prompts):
+
+```powershell
+.\.venv\Scripts\python.exe scripts\manage_secrets.py set DATABASE_URL
+.\.venv\Scripts\python.exe scripts\manage_secrets.py set DATABASE_MIGRATION_URL
+.\.venv\Scripts\python.exe scripts\manage_secrets.py status --require DATABASE_URL DATABASE_MIGRATION_URL
+```
+
+DPAPI loads server-side only; explicit environment takes precedence. Keep TLS
+enabled (`sslmode=require` minimum, certificate verification where supported).
+There is no Supabase SDK/Auth/service-role-key requirement. Never place private
+URLs/keys in `NEXT_PUBLIC_*`, browser code, logs, reports or archives.
+
+Applying schema to a **separately approved, empty staging project** is distinct
+from transferring existing data or starting the application:
+
+```powershell
+$env:DB_BACKEND='postgresql'
+.\.venv\Scripts\python.exe scripts\run_migrations.py
+$env:DB_BACKEND='sqlite'
+```
+
+Successful runner output is the inspected revision, not an assumed `head`.
+Failures return nonzero without printing driver SQL/credentials. Do not use
+the old destructive downgrade example below for these forward-only revisions.
+The new lazy tables add real foreign keys; pre-existing orphaned records must
+be reconciled before transfer, never discarded automatically.
+
+### RLS and grants with custom authentication
+
+Migrations enable RLS on the 42 application tables, revoke table access from
+PUBLIC and existing `anon`/`authenticated` roles, and create **no public
+policies**. The Data API has no intended application-data surface. Keep its
+exposure disabled; do not grant browser roles access to auth, audit, trading,
+passkey or PII tables. Review default privileges for the migration role so
+future tables/sequences/functions do not inadvertently gain API grants.
+
+The tested disposable bootstrap connection is a superuser and bypasses RLS.
+Supabase's actual application role has **not yet been inspected**. Determine
+`rolsuper`, `rolbypassrls` and table ownership with the deployment operator.
+Owners/BYPASSRLS connections are not protected by RLS; application ownership
+checks remain authoritative. A non-bypass app role currently has no policies
+and therefore cannot operate normally. Do not solve that by granting a public
+`USING (true)` policy. Provision/review the trusted backend role and its DML
+grants separately; application-wide authorization proof remains required.
+
+### Data migration and recovery checkpoint
+
+`scripts/migrate_sqlite_to_postgres.py` defaults to read-only inventory. The
+observed source is `database/stockpilot.db` (or explicit
+`STOCKPILOT_DATABASE_PATH`). `docs/supabase-source-inventory.json` records actual
+tables/counts/columns without row values. Inventory found no FK violations or
+unmapped tables. This file is an observation, not production migration approval.
+
+The transfer utility requires explicit `--apply --approve-data-migration`, a
+new `--backup` path and existing `STOCKPILOT_BACKUP_SECRET`; it uses only the
+direct `DATABASE_MIGRATION_URL`. It restore-tests an authenticated encrypted
+snapshot, imports that snapshot in one transaction into an empty target,
+reconciles all values/counts, and repairs serial counters. Matching retry is
+reconciliation-only; a nonmatching nonempty target is refused. Invalid JSON,
+timestamps, missing tables/columns or FK failures abort rather than being
+dropped/coerced silently. Large-source memory/throughput has not been load-tested.
+
+Quiesce all API/worker/scheduler writers before an approved transfer. Independently
+back up the PostgreSQL target with the operator's `pg_dump -Fc` procedure and
+restore it to a separate database before granting a go decision. Supabase
+dashboard backup/PITR capabilities depend on the project's plan and must be
+verified. The real source was inventoried and an encrypted local backup/restore
+rehearsal passed; no approved transfer to PostgreSQL or traffic cutover ran.
+
+Recovery is a verified backup restored to a new path/database, then explicit
+configuration selection. After any cloud-only writes, switching to the old
+SQLite file would lose those writes from the application's view: reconcile or
+approve that recovery point first. There is no dual-write or synchronization.
+No destructive schema reset or production downgrade is part of this workflow.
+
+### Monitoring, launchers and CI
+
+Monitor `pg_stat_activity`, pool utilization/exhaustion, transaction duration,
+lock waits, failed requests and migration revision. Size the local pool per
+API/worker process against Supabase's total limits; thread leases are returned
+on DAO-session exit. Keep transaction-pooler transactions short; do not rely
+on session state. Exhaustion/errors must surface as failures, not successful
+SQLite fallback. Connection-exhaustion capacity/load is still unverified.
+
+Windows local launchers remain SQLite-first and require no Docker/Redis/cloud.
+The existing Docker production stack is **not yet accepted**: API startup and
+auth/trading jobs still require completion of shared persistence adoption.
+Its beat/worker settings and migration-only direct URL must be reviewed before
+cloud deployment. Docker execution was unavailable on this workstation.
+
+CI retains its existing gates and adds a separate loopback PostgreSQL 16 service
+running the extended `verify_backend_parity.py --live`. That command tests
+schema/DAOs/RLS/concurrency/transfer using generated schemas in a disposable
+`stockpilot_test*` database and rejects remote/production destinations.
+Remote CI execution is not claimed by local checks. The extracted application
+smoke with PostgreSQL remains a release blocker, not a static parity pass.
+
+See `docs/SUPABASE_INTEGRATION_STATUS.md` for the assessment, file report,
+retained local stores, actual test evidence and remaining work.
+
+**Current live/default storage remains SQLite.** The future Postgres/Supabase
+readiness changes below do not switch the app, migrate data or make a database
+server a startup/test/build prerequisite. Existing Postgres deployment examples
+are opt-in; the shared repository path still has the gaps recorded below.
+
+## Historical prepare-only assessment (superseded by the checkpoint above)
+
+Treat Supabase as hosted PostgreSQL for this preparation. Keep `DB_BACKEND` unset
+(or `sqlite`); the existing `STOCKPILOT_DB_TYPE` default is also still `sqlite`.
+No environment variables need to be added to a fresh/local installation.
+
+When a later, separately validated cutover explicitly selects Postgres, configure
+these optional **backend-only** variables through the existing secret manager:
+
+| Variable | Future purpose | Optional fallback |
+| --- | --- | --- |
+| `DB_BACKEND=postgresql` | Opt-in DAO selector alias; `STOCKPILOT_DB_TYPE=postgresql` remains supported | Unset defaults to existing SQLite selection |
+| `DATABASE_URL` | Pooled PostgreSQL connection string for application DAO traffic | `STOCKPILOT_DATABASE_URL`, then `DATABASE_MIGRATION_URL` |
+| `DATABASE_MIGRATION_URL` | Direct PostgreSQL connection string for Alembic only | `DATABASE_URL`, then legacy `STOCKPILOT_DATABASE_URL` |
+| `STOCKPILOT_DATABASE_URL` | Existing single-URL configuration, retained for compatibility | Existing SQLite fallback if no Postgres path is selected |
+
+Use the project dashboard's actual PostgreSQL URLs with the appropriate TLS
+settings (`sslmode=require` at minimum, and certificate validation where supported).
+If only one URL is configured, both selected-Postgres paths can use it as before;
+for Supabase, deliberately supply both pooled and direct URLs. Supabase's pooled
+connections, especially transaction-pooler mode, do not support every session/DDL
+operation needed by Alembic; migrations must use the direct endpoint. Obtain a
+direct endpoint reachable by the migration runner (including its IPv4/IPv6 needs).
+An explicit Postgres argument to `upgrade_to_head(url)` overrides environment
+selection for that deliberate migration invocation. No such invocation was run.
+
+`DATABASE_URL` and `DATABASE_MIGRATION_URL` alone do **not** select Postgres.
+`DB_BACKEND=sqlite` also prevents legacy URL auto-selection in the DAO factory.
+For backward compatibility only, an existing `STOCKPILOT_DATABASE_URL` beginning
+with `postgresql://` still auto-selects the legacy DAO path when `DB_BACKEND` is
+unset. Keep that legacy URL absent on SQLite-only installations as today.
+Supplying the future selector does not convert the whole application: many auth,
+admin, forecast and scheduler paths still call SQLite directly.
+
+Supabase's `service_role` key is **not a PostgreSQL password** and is not needed
+by this connection-only preparation. No new key variable or SDK is introduced.
+If a later server-side Supabase integration needs that key, provision it in the
+backend secret store using the existing `scripts/manage_secrets.py`/DPAPI or
+deployment secret-manager pattern. Never put it in `frontend/.env.local`, a
+`NEXT_PUBLIC_*` variable, frontend code, an archive or a browser request.
+
+RLS policies, Supabase Auth, Realtime and Supabase-specific hardening are separate
+future work once an actual instance is live and testable. SQLite/Postgres
+dual-write/sync, data transfer and the live switch are also separate tasks.
+
+### Non-connecting DAO/migration review — 2026-10-07
+
+Read side by side: `services/db/sqlite_impl.py`, `postgres_impl.py`, `base.py`,
+`database.py` persistence helpers, `alembic/env.py` and the only current revision
+`alembic/versions/8788046ff051_initial_postgresql_schema.py`.
+
+**No public DAO method names are missing:** database wrapper, eight DAO classes
+and factory all have matching public signatures. There is nevertheless partial
+implementation and behavioral divergence; none of these were silently repaired:
+
+| Gap found by reading | Evidence and later acceptance needed |
+| --- | --- |
+| Partial range-forecast persistence | `PostgresPredictionDAO.save_range_forecast` stores only user/symbol/JSON/status, labels forecast status `pending`, and omits bounds, provenance, immutable hashes and outcome status produced by `database.save_range_forecast`. Not equivalent to SQLite. |
+| History/result shape | Postgres history returns `linear_prediction`/`decision_tree_prediction`/`random_forest_prediction`/`prediction_date`; SQLite maps to `linear`/`dt`/`rf`/`date`. Postgres details return raw JSON columns; SQLite decodes them to `payload`, `forecast_evidence`, `outcome_evidence`. Postgres also omits SQLite's strip/limit normalization. |
+| Official-outcome protection | Postgres settled query checks only `outcome_status='settled'`; SQLite requires automatic, official, non-demo, non-stale, publishable outcomes and actual/coverage/score evidence. Result fields/order/limit bounds differ as well. |
+| Legacy SQLite prediction adapter defects | SQLite `save_prediction` reads `kwargs['symbol']` instead of its explicit symbol; both SQLite prediction save wrappers query `last_insert_rowid()` on a different connection from the helper's insert. These pre-existing SQLite behaviors are intentionally untouched. Postgres payload adaptation/serialization also needs live validation. |
+| MFA/recovery semantics | SQLite secret replacement resets the row via `INSERT OR REPLACE`; Postgres upsert preserves fields such as prior TOTP counter/creation time. Postgres ignores duplicate recovery-code inserts; SQLite raises a uniqueness error. |
+| Paper-account duplicate behavior | Postgres ignores duplicate creation and returns the newly requested balances even if a different stored account exists; SQLite duplicate insertion raises. |
+| Connection/concurrency lifecycle | `PostgresDatabase` retains a shared `_conn` despite a threaded pool, leaves cursors open and has no pool shutdown method. Sale operations lack a row lock; watchlist check-then-insert can race. No concurrency or transaction proof is implied. |
+| Runtime schema/adoption | The initial 29-table revision lacks newer runtime-created tables (e.g. passkeys/login anomalies/settings/guardrails/strategies); numerous routes still bypass the DAO. Completing repository/schema adoption is required before cutover. |
+| Migration runner legacy behavior | The runner returns `unknown` on execution failure and `head` rather than an inspected revision. Default SQLite Alembic behavior is not repaired here; SQLite startup uses `database.create_tables()`. Explicit Postgres configuration now reaches Alembic rather than being silently ignored. |
+
+The revision's executable DDL is PostgreSQL-standard SQLAlchemy table/index DDL
+and PostgreSQL trigger/function syntax (`LANGUAGE plpgsql`, `IS DISTINCT FROM`,
+`EXECUTE FUNCTION`, `DROP TRIGGER ... ON ...`). No SQLite `PRAGMA`, `AUTOINCREMENT`
+keyword, `INSERT OR REPLACE`, `datetime('now')`, `last_insert_rowid()` or
+`RAISE(ABORT)` is present in executable migration SQL (a comparison comment names
+SQLite's trigger equivalent). The revision itself is byte-for-byte unchanged.
+This is a read-only syntax review, **not live migration acceptance**. Several
+string-column `server_default='CURRENT_TIMESTAMP'` values are quoted literals,
+not timestamp expressions, and JSON defaults are overquoted strings; those
+semantic/schema gaps remain flagged for a live-tested follow-up.
+
+### Standing readiness checks
+
+`python scripts/verify_backend_parity.py` inspects public method/property names,
+parameter kinds/names/defaults/annotations and returns without constructing a
+DAO or connecting to either database. Missing/inherited abstract methods or
+signature drift fail CI. Backend constructors/private helpers and concrete
+connection/cursor return types allowed by the shared interface differ by design.
+Passing this gate proves API shape only, not SQL behavior or cutover readiness.
+
+`tests/test_supabase_readiness.py` pins the unchanged SQLite implementation bytes
+(both exact LF/CRLF checkouts permitted by Git)
+and compares serialized result bytes, executed SQL and entire SQLite database
+bytes for unset selectors versus future URLs/explicit SQLite. The full existing
+suite must also pass with `DB_BACKEND` unset. No real Postgres/Supabase server is
+contacted by these readiness checks.
+
 StockPilot v13 is a multi-service application:
 
 | Service    | Port | Purpose                                        |

@@ -1,5 +1,10 @@
 # Data Retention and Account Deletion
 
+Versioned research-disclaimer acknowledgments are account compliance records,
+exempt from ordinary audit expiry. An unchanged disclosure does not require
+reacceptance merely because a retention sweep ran. A version change requires a
+new acknowledgment. Account deletion still erases these user-linked records.
+
 Status: enforced technical policy for the local/private release. Regulatory and legal review remains required before public or multi-user deployment.
 
 ## Scope

@@ -128,7 +128,8 @@ describe("ForecastCard", () => {
       },
     }} />);
     expect(screen.getByText("Model assessment")).toBeInTheDocument();
-    expect(screen.getAllByText((_content, el) => el?.textContent?.replace(/\s+/g, " ").includes("Confidence 74/100") ?? false).length).toBeGreaterThan(0);
+    expect(screen.getAllByText((_content, el) => el?.textContent?.replace(/\s+/g, " ").includes("Evidence diagnostic 74/100") ?? false).length).toBeGreaterThan(0);
+    expect(screen.getByText(/not a calibrated probability/i)).toBeInTheDocument();
     expect(screen.getByText(/Upside 61%/)).toBeInTheDocument();
     expect(screen.getByText(/Downside 39%/)).toBeInTheDocument();
     expect(screen.getByText("Mild bullish trend / Normal volatility")).toBeInTheDocument();
@@ -177,7 +178,7 @@ describe("ForecastCard", () => {
       disclaimer: "Research support only.",
     }} />);
 
-    expect(screen.getByText("Cross-horizon confidence")).toBeInTheDocument();
+    expect(screen.getByText("Cross-horizon consistency")).toBeInTheDocument();
     expect(screen.getByText(/45\/100/)).toBeInTheDocument();
     expect(screen.getByText(/materially different directions/)).toBeInTheDocument();
     expect(screen.getByText(/no corridor is adjusted or hidden/i)).toBeInTheDocument();

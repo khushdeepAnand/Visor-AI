@@ -6,6 +6,7 @@ import getpass
 import os
 import secrets
 import sys
+import uuid
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,7 @@ from services.secure_secrets import (
     default_store_path,
     read_secure_secrets,
     update_secure_secrets,
+    write_secure_secrets,
 )
 
 
@@ -108,6 +110,29 @@ def _rotate_group(group: str) -> int:
     return 0
 
 
+def _migrate_environment(env_file: Path) -> int:
+    """Preserve effective values and an encrypted copy before clearing fallback."""
+    existing = read_secure_secrets()
+    fallback = {name: value for name, value in _dotenv_values(env_file).items() if value}
+    if not fallback:
+        print("No populated allowlisted fallback credentials to move.")
+        return 0
+    backup = default_store_path().with_name("env-fallback-" + uuid.uuid4().hex + ".dpapi.json")
+    write_secure_secrets(fallback, backup)
+    if read_secure_secrets(backup) != fallback:
+        raise SecretStoreError("Encrypted fallback backup did not verify; plaintext was preserved.")
+    updates = {name: value for name, value in fallback.items() if name not in existing}
+    if updates:
+        update_secure_secrets(updates)
+    expected = {**fallback, **existing}  # Existing DPAPI values have precedence.
+    if read_secure_secrets() != expected:
+        raise SecretStoreError("Effective secret preservation did not verify; plaintext was preserved.")
+    _scrub_dotenv(env_file, set(fallback))
+    print("Fallback credentials moved; effective DPAPI values preserved.")
+    print(f"Verified current-user encrypted fallback backup: {backup}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -120,6 +145,8 @@ def main() -> int:
     delete.add_argument("name", choices=sorted(SENSITIVE_KEYS))
     bootstrap = subparsers.add_parser("bootstrap", help="Initialize required secrets and scrub plaintext fallbacks")
     bootstrap.add_argument("--env-file", type=Path, default=Path(".env"))
+    migrate = subparsers.add_parser("migrate-env", help="Preserve an encrypted fallback backup, move missing values to DPAPI, and clear plaintext assignments")
+    migrate.add_argument("--env-file", type=Path, default=Path(".env"))
     rotate = subparsers.add_parser("rotate", help="Rotate a supported credential group atomically")
     rotate.add_argument("group", choices=("jwt", "upstox", "google"))
     args = parser.parse_args()
@@ -137,6 +164,8 @@ def main() -> int:
             return 0
         if args.command == "bootstrap":
             return _bootstrap(args.env_file.resolve())
+        if args.command == "migrate-env":
+            return _migrate_environment(args.env_file.resolve())
         return _rotate_group(args.group)
     except SecretStoreError as exc:
         print(f"Secret-store error: {exc}", file=sys.stderr)

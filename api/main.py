@@ -64,6 +64,8 @@ async def lifespan(_app: FastAPI):
         FORECAST_JOBS.shutdown()
         from services.telemetry import shutdown_telemetry
         shutdown_telemetry()
+        from services.db.factory import close_dao_pools
+        close_dao_pools()
 
 
 app = FastAPI(
@@ -145,6 +147,12 @@ def api_metrics() -> dict[str, Any]:
         "error_rate": snapshot["error_rate"],
         "average_latency_ms": snapshot["average_latency_ms"],
     }
+
+
+@app.get("/metrics", response_class=Response)
+def prometheus_metrics() -> Response:
+    """Aggregate process metrics for a trusted-network Prometheus scraper."""
+    return Response(API_METRICS.prometheus(), media_type="text/plain; version=0.0.4; charset=utf-8")
 
 
 @app.websocket("/ws/quotes/{symbol}")

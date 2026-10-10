@@ -22,6 +22,10 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+from services.db.base import DatabaseInterface
+from services.db.sqlite_impl import SQLiteDatabase
+from services.db.factory import get_database
+from services.db.configuration import postgres_selected
 from datetime import datetime, timezone
 from typing import Any, Callable, Sequence, cast
 
@@ -64,16 +68,18 @@ class ForwardTestStore:
     def __init__(self, connection_factory: Callable[[], sqlite3.Connection] | None = None) -> None:
         self._connection_factory = connection_factory
 
-    def _connect(self) -> sqlite3.Connection:
+    def _connect(self) -> DatabaseInterface:
         if self._connection_factory is not None:
-            return self._connection_factory()
-        from database import get_connection
-
-        return cast(sqlite3.Connection, get_connection())
+            return SQLiteDatabase(self._connection_factory())
+        return get_database()
 
     def ensure_schema(self) -> None:
         connection = self._connect()
         try:
+            if self._connection_factory is None and postgres_selected():
+                connection.fetchall("SELECT id FROM forward_tests LIMIT 0")
+                connection.fetchall("SELECT id FROM forward_test_events LIMIT 0")
+                return
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS forward_tests (
@@ -125,31 +131,38 @@ class ForwardTestStore:
         stamp = (now or datetime.now(timezone.utc)).isoformat()
         connection = self._connect()
         try:
-            active = connection.execute(
-                "SELECT COUNT(*) FROM forward_tests WHERE user_id = ? AND status = 'active'",
+            connection.begin_write("forward-tests:" + str(int(user_id)))
+            if self._connection_factory is None and postgres_selected():
+                owned = connection.fetchone(connection.sql("SELECT id FROM strategy_definitions WHERE id=? AND user_id=?"), (int(strategy_id), int(user_id)))
+                if owned is None:
+                    raise ForwardTestError("strategy_not_found", "No saved strategy with that id for this account.")
+            active_row = connection.fetchone(connection.sql(
+                "SELECT COUNT(*) AS n FROM forward_tests WHERE user_id = ? AND status = 'active'"),
                 (int(user_id),),
-            ).fetchone()[0]
+            )
+            active = int(active_row["n"]) if active_row else 0
             if int(active) >= MAX_ACTIVE_TESTS:
                 raise ForwardTestError(
                     "forward_test_limit_reached",
                     f"At most {MAX_ACTIVE_TESTS} active forward tests are supported.",
                 )
-            existing = connection.execute(
-                "SELECT id FROM forward_tests WHERE user_id = ? AND strategy_id = ? AND status = 'active'",
+            existing = connection.fetchone(connection.sql(
+                "SELECT id FROM forward_tests WHERE user_id = ? AND strategy_id = ? AND status = 'active'"),
                 (int(user_id), int(strategy_id)),
-            ).fetchone()
+            )
             if existing is not None:
                 raise ForwardTestError(
                     "forward_test_already_active",
                     "This strategy is already being forward-tested.",
                 )
-            cursor = connection.execute(
-                "INSERT INTO forward_tests (user_id, strategy_id, name, symbols, status, started_at) VALUES (?,?,?,?,'active',?)",
+            cursor = connection.execute(connection.sql(
+                "INSERT INTO forward_tests (user_id, strategy_id, name, symbols, status, started_at) VALUES (?,?,?,?,'active',?) RETURNING id"),
                 (int(user_id), int(strategy_id), str(name).strip() or f"Strategy {strategy_id}", json.dumps(cleaned), stamp),
             )
-            if cursor.lastrowid is None:
+            inserted = cursor.fetchone()
+            if inserted is None:
                 raise RuntimeError("Forward test did not receive an id.")
-            test_id = int(cursor.lastrowid)
+            test_id = int(inserted["id"])
             connection.commit()
         finally:
             connection.close()
@@ -168,8 +181,9 @@ class ForwardTestStore:
         stamp = (now or datetime.now(timezone.utc)).isoformat()
         connection = self._connect()
         try:
-            cursor = connection.execute(
-                "UPDATE forward_tests SET status = 'stopped', stopped_at = ? WHERE user_id = ? AND id = ? AND status = 'active'",
+            connection.begin_write("forward-test:" + str(int(test_id)))
+            cursor = connection.execute(connection.sql(
+                "UPDATE forward_tests SET status = 'stopped', stopped_at = ? WHERE user_id = ? AND id = ? AND status = 'active'"),
                 (stamp, int(user_id), int(test_id)),
             )
             connection.commit()
@@ -183,23 +197,23 @@ class ForwardTestStore:
         self.ensure_schema()
         connection = self._connect()
         try:
-            row = connection.execute(
-                "SELECT id, strategy_id, name, symbols, status, started_at, stopped_at, last_evaluated_at FROM forward_tests WHERE user_id = ? AND id = ?",
+            row = connection.fetchone(connection.sql(
+                "SELECT id, strategy_id, name, symbols, status, started_at, stopped_at, last_evaluated_at FROM forward_tests WHERE user_id = ? AND id = ?"),
                 (int(user_id), int(test_id)),
-            ).fetchone()
+            )
         finally:
             connection.close()
         if row is None:
             raise ForwardTestError("forward_test_not_found", "No forward test with that id.")
         return {
-            "id": int(row[0]),
-            "strategy_id": int(row[1]),
-            "name": row[2],
-            "symbols": json.loads(row[3]),
-            "status": row[4],
-            "started_at": row[5],
-            "stopped_at": row[6],
-            "last_evaluated_at": row[7],
+            "id": int(row["id"]),
+            "strategy_id": int(row["strategy_id"]),
+            "name": row["name"],
+            "symbols": json.loads(row["symbols"]),
+            "status": row["status"],
+            "started_at": row["started_at"],
+            "stopped_at": row["stopped_at"],
+            "last_evaluated_at": row["last_evaluated_at"],
             "order_placement": ORDER_PLACEMENT,
         }
 
@@ -207,22 +221,22 @@ class ForwardTestStore:
         self.ensure_schema()
         connection = self._connect()
         try:
-            rows = connection.execute(
-                "SELECT id, strategy_id, name, symbols, status, started_at, stopped_at, last_evaluated_at FROM forward_tests WHERE user_id = ? ORDER BY started_at DESC",
+            rows = connection.fetchall(connection.sql(
+                "SELECT id, strategy_id, name, symbols, status, started_at, stopped_at, last_evaluated_at FROM forward_tests WHERE user_id = ? ORDER BY started_at DESC"),
                 (int(user_id),),
-            ).fetchall()
+            )
         finally:
             connection.close()
         return [
             {
-                "id": int(row[0]),
-                "strategy_id": int(row[1]),
-                "name": row[2],
-                "symbols": json.loads(row[3]),
-                "status": row[4],
-                "started_at": row[5],
-                "stopped_at": row[6],
-                "last_evaluated_at": row[7],
+                "id": int(row["id"]),
+                "strategy_id": int(row["strategy_id"]),
+                "name": row["name"],
+                "symbols": json.loads(row["symbols"]),
+                "status": row["status"],
+                "started_at": row["started_at"],
+                "stopped_at": row["stopped_at"],
+                "last_evaluated_at": row["last_evaluated_at"],
                 "order_placement": ORDER_PLACEMENT,
             }
             for row in rows
@@ -233,10 +247,14 @@ class ForwardTestStore:
             return 0
         connection = self._connect()
         try:
+            connection.begin_write("forward-test:" + str(int(test_id)))
+            parent = connection.fetchone(connection.sql("SELECT status FROM forward_tests WHERE id=?"), (int(test_id),))
+            if parent is None or parent["status"] != "active":
+                raise ForwardTestError("forward_test_inactive", "This forward test is not active.")
             inserted = 0
             for event in events:
-                cursor = connection.execute(
-                    "INSERT OR IGNORE INTO forward_test_events (forward_test_id, symbol, bar_at, action, price, reason, recorded_at) VALUES (?,?,?,?,?,?,?)",
+                cursor = connection.execute(connection.sql(
+                    "INSERT INTO forward_test_events (forward_test_id, symbol, bar_at, action, price, reason, recorded_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(forward_test_id,symbol,bar_at,action) DO NOTHING"),
                     (
                         int(test_id),
                         str(event["symbol"]),
@@ -248,8 +266,8 @@ class ForwardTestStore:
                     ),
                 )
                 inserted += cursor.rowcount if cursor.rowcount > 0 else 0
-            connection.execute(
-                "UPDATE forward_tests SET last_evaluated_at = ? WHERE id = ?",
+            connection.execute(connection.sql(
+                "UPDATE forward_tests SET last_evaluated_at = ? WHERE id = ?"),
                 (stamp, int(test_id)),
             )
             connection.commit()
@@ -261,20 +279,20 @@ class ForwardTestStore:
         self.ensure_schema()
         connection = self._connect()
         try:
-            rows = connection.execute(
-                "SELECT symbol, bar_at, action, price, reason, recorded_at FROM forward_test_events WHERE forward_test_id = ? ORDER BY bar_at ASC, id ASC LIMIT ?",
+            rows = connection.fetchall(connection.sql(
+                "SELECT symbol, bar_at, action, price, reason, recorded_at FROM forward_test_events WHERE forward_test_id = ? ORDER BY bar_at ASC, id ASC LIMIT ?"),
                 (int(test_id), int(limit)),
-            ).fetchall()
+            )
         finally:
             connection.close()
         return [
             {
-                "symbol": row[0],
-                "bar_at": row[1],
-                "action": row[2],
-                "price": _round(row[3], 4),
-                "reason": row[4],
-                "recorded_at": row[5],
+                "symbol": row["symbol"],
+                "bar_at": row["bar_at"],
+                "action": row["action"],
+                "price": _round(row["price"], 4),
+                "reason": row["reason"],
+                "recorded_at": row["recorded_at"],
             }
             for row in rows
         ]

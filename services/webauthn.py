@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -42,6 +43,8 @@ except ImportError:  # pragma: no cover - exercised only when lib absent
     WEBAUTHN_AVAILABLE = False
 
 from database import get_connection
+from services.db.configuration import postgres_selected
+from services.db.factory import dao_session
 
 # Allow a single lowercase b64 variant used by browsers.
 def _b64url_encode(data: bytes) -> str:
@@ -74,6 +77,12 @@ def expected_origins() -> list[str]:
 
 
 def _ensure_table() -> None:
+    if postgres_selected():
+        # PostgreSQL schema belongs to Alembic. Verify access honestly; never run
+        # SQLite DDL or create a local auth table when the cloud backend is selected.
+        with dao_session() as factory:
+            factory.db.fetchall("SELECT credential_id FROM webauthn_credentials LIMIT 0")
+        return
     conn = get_connection()
     try:
         conn.execute(
@@ -106,13 +115,12 @@ def _ensure_table() -> None:
 
 _CHALLENGES: dict[str, dict[str, Any]] = {}
 _CHALLENGE_TTL = timedelta(minutes=5)
+_CHALLENGE_LOCK = threading.Lock()
 
 
 def _new_challenge(kind: str, user_id: int, challenge_bytes: bytes) -> tuple[str, dict[str, Any]]:
     # Prune expired
     now = datetime.now(timezone.utc)
-    for key in [k for k, v in _CHALLENGES.items() if v["expires"] <= now]:
-        _CHALLENGES.pop(key, None)
     # The lookup key IS the base64url challenge the browser received, so the
     # frontend simply echoes options.challenge back -- single-use + bound user.
     token = _b64url_encode(challenge_bytes)
@@ -123,22 +131,26 @@ def _new_challenge(kind: str, user_id: int, challenge_bytes: bytes) -> tuple[str
         "expires": now + _CHALLENGE_TTL,
         "consumed": False,
     }
-    _CHALLENGES[token] = record
+    with _CHALLENGE_LOCK:
+        for key in [k for k, v in _CHALLENGES.items() if v["expires"] <= now]:
+            _CHALLENGES.pop(key, None)
+        _CHALLENGES[token] = record
     return token, record
 
 
 def _consume_challenge(token: str, user_id: int, kind: str) -> dict[str, Any]:
-    record = _CHALLENGES.get(token)
-    if (
-        record is None
-        or record["consumed"]
-        or record["expires"] <= datetime.now(timezone.utc)
-        or int(record["user_id"]) != int(user_id)
-        or record["kind"] != kind
-    ):
-        raise ValueError("The passkey challenge is invalid or expired.")
-    record["consumed"] = True
-    return record
+    with _CHALLENGE_LOCK:
+        record = _CHALLENGES.get(token)
+        if (
+            record is None
+            or record["consumed"]
+            or record["expires"] <= datetime.now(timezone.utc)
+            or int(record["user_id"]) != int(user_id)
+            or record["kind"] != kind
+        ):
+            raise ValueError("The passkey challenge is invalid or expired.")
+        record["consumed"] = True
+        return record
 
 
 # ---------------------------------------------------------------------
@@ -147,39 +159,35 @@ def _consume_challenge(token: str, user_id: int, kind: str) -> dict[str, Any]:
 
 def list_credentials(user_id: int) -> list[dict[str, Any]]:
     _ensure_table()
-    conn = get_connection()
-    try:
-        rows = conn.execute(
+    with dao_session() as factory:
+        db = factory.db
+        rows = db.fetchall(db.sql(
             """SELECT id, credential_id, label, transports, created_at, last_used_at
-               FROM webauthn_credentials WHERE user_id=? ORDER BY created_at""",
+               FROM webauthn_credentials WHERE user_id=? ORDER BY created_at"""),
             (int(user_id),),
-        ).fetchall()
+        )
         return [
             {
-                "id": r[0],
-                "credential_id": r[1],
-                "label": r[2] or "Passkey",
-                "transports": json.loads(r[3] or "[]"),
-                "created_at": r[4],
-                "last_used_at": r[5],
+                "id": r["id"],
+                "credential_id": r["credential_id"],
+                "label": r["label"] or "Passkey",
+                "transports": json.loads(r["transports"] or "[]"),
+                "created_at": r["created_at"],
+                "last_used_at": r["last_used_at"],
             }
             for r in rows
         ]
-    finally:
-        conn.close()
 
 
 def has_credentials(user_id: int) -> bool:
     _ensure_table()
-    conn = get_connection()
-    try:
-        row = conn.execute(
-            "SELECT 1 FROM webauthn_credentials WHERE user_id=? LIMIT 1",
+    with dao_session() as factory:
+        db = factory.db
+        row = db.fetchone(db.sql(
+            "SELECT 1 FROM webauthn_credentials WHERE user_id=? LIMIT 1"),
             (int(user_id),),
-        ).fetchone()
+        )
         return row is not None
-    finally:
-        conn.close()
 
 
 # ---------------------------------------------------------------------
@@ -193,17 +201,15 @@ def begin_registration(user: dict[str, Any]) -> dict[str, Any]:
     _ensure_table()
 
     user_id = int(user["id"])
-    conn = get_connection()
-    try:
+    with dao_session() as factory:
+        db = factory.db
         existing = {
-            r[0]
-            for r in conn.execute(
-                "SELECT credential_id FROM webauthn_credentials WHERE user_id=?",
+            r["credential_id"]
+            for r in db.fetchall(db.sql(
+                "SELECT credential_id FROM webauthn_credentials WHERE user_id=?"),
                 (user_id,),
-            ).fetchall()
+            )
         }
-    finally:
-        conn.close()
 
     options = generate_registration_options(
         rp_id=rp_id(),
@@ -257,21 +263,25 @@ def complete_registration(user: dict[str, Any], body: dict[str, Any]) -> dict[st
     except Exception:
         transports = "[]"
 
-    conn = get_connection()
-    try:
-        conn.execute(
+    with dao_session() as factory:
+        db = factory.db
+        db.begin_write("security:" + str(user_id))
+        cursor = db.execute(db.sql(
             """INSERT INTO webauthn_credentials
                (user_id, credential_id, public_key, sign_count, transports, label)
                VALUES (?,?,?,?,?,?)
                ON CONFLICT(credential_id) DO UPDATE SET
-                 sign_count=excluded.sign_count,
-                 transports=excluded.transports""",
+                  sign_count=CASE WHEN webauthn_credentials.sign_count>excluded.sign_count
+                                  THEN webauthn_credentials.sign_count ELSE excluded.sign_count END,
+                  transports=excluded.transports
+                WHERE webauthn_credentials.user_id=excluded.user_id
+                  AND webauthn_credentials.public_key=excluded.public_key"""),
             (user_id, credential_id, public_key, int(verification.sign_count),
              transports, str(body.get("label") or "Passkey")),
         )
-        conn.commit()
-    finally:
-        conn.close()
+        if cursor.rowcount != 1:
+            raise ValueError("The passkey is already registered with a different account or public key.")
+        db.commit()
 
     from database import record_audit_event
     record_audit_event(user_id, "webauthn.register", entity_type="credential",
@@ -320,65 +330,45 @@ def complete_authentication(user_id: int, body: dict[str, Any]) -> dict[str, Any
 
     client_response = body.get("response") or body
     credential_id = client_response.get("id")
-    conn = get_connection()
-    try:
-        row = conn.execute(
-            "SELECT id, public_key, sign_count FROM webauthn_credentials "
-            "WHERE credential_id=? AND user_id=?",
-            (str(credential_id), int(user_id)),
-        ).fetchone()
-    finally:
-        conn.close()
-    if row is None:
-        raise ValueError("The passkey is not registered for this account.")
-
-    try:
-        verification = verify_authentication_response(
-            credential=client_response,
-            expected_challenge=challenge,
-            expected_origin=expected_origins(),
-            expected_rp_id=rp_id(),
-            credential_public_key=_b64url_decode(str(row[1])),
-            credential_current_sign_count=int(row[2]),
-        )
-    except Exception as exc:
-        raise ValueError(f"Passkey verification failed: {exc}") from exc
-
-    new_count = int(verification.new_sign_count)
-    if new_count and new_count <= int(row[2]):
-        # Counter rollback indicates a cloned authenticator -> revoke it.
-        conn = get_connection()
+    with dao_session() as factory:
+        db = factory.db
+        db.begin_write("security:" + str(int(user_id)))
+        query = "SELECT id,public_key,sign_count FROM webauthn_credentials WHERE credential_id=? AND user_id=?"
+        if postgres_selected():
+            query += " FOR UPDATE"
+        row = db.fetchone(db.sql(query), (str(credential_id), int(user_id)))
+        if row is None:
+            raise ValueError("The passkey is not registered for this account.")
         try:
-            conn.execute("DELETE FROM webauthn_credentials WHERE id=?", (int(row[0]),))
-            conn.commit()
-        finally:
-            conn.close()
-        from database import record_audit_event
-        record_audit_event(user_id, "webauthn.counter_rollback",
-                           entity_type="credential", entity_id=str(credential_id))
-        raise ValueError("This passkey was revoked because its counter regressed.")
-
-    conn = get_connection()
-    try:
-        conn.execute(
-            "UPDATE webauthn_credentials SET sign_count=?, last_used_at=? WHERE id=?",
-            (new_count, datetime.now(timezone.utc).isoformat(), int(row[0])),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+            verification = verify_authentication_response(
+                credential=client_response, expected_challenge=challenge,
+                expected_origin=expected_origins(), expected_rp_id=rp_id(),
+                credential_public_key=_b64url_decode(str(row["public_key"])),
+                credential_current_sign_count=int(row["sign_count"]),
+            )
+        except Exception as exc:
+            raise ValueError(f"Passkey verification failed: {exc}") from exc
+        new_count = int(verification.new_sign_count)
+        if new_count and new_count <= int(row["sign_count"]):
+            db.execute(db.sql("DELETE FROM webauthn_credentials WHERE id=? AND user_id=?"), (int(row["id"]), int(user_id)))
+            db.commit()
+            from database import record_audit_event
+            record_audit_event(user_id, "webauthn.counter_rollback", entity_type="credential", entity_id=str(credential_id))
+            raise ValueError("This passkey was revoked because its counter regressed.")
+        db.execute(db.sql("UPDATE webauthn_credentials SET sign_count=?,last_used_at=? WHERE id=? AND user_id=?"),
+                   (new_count, datetime.now(timezone.utc).isoformat(), int(row["id"]), int(user_id)))
+        db.commit()
     return {"verified": True}
 
 
 def delete_credential(user_id: int, credential_id: int) -> bool:
     _ensure_table()
-    conn = get_connection()
-    try:
-        cursor = conn.execute(
-            "DELETE FROM webauthn_credentials WHERE id=? AND user_id=?",
+    with dao_session() as factory:
+        db = factory.db
+        db.begin_write("security:" + str(user_id))
+        cursor = db.execute(db.sql(
+            "DELETE FROM webauthn_credentials WHERE id=? AND user_id=?"),
             (int(credential_id), int(user_id)),
         )
-        conn.commit()
+        db.commit()
         return bool(cursor.rowcount > 0)
-    finally:
-        conn.close()

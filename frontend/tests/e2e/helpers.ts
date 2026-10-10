@@ -1,6 +1,4 @@
-import { expect, type Page } from "@playwright/test";
-
-const ORIGIN = "http://localhost:3000";
+import { expect, type APIResponse, type Page } from "@playwright/test";
 
 async function getSystemWithRetry(page: Page): Promise<any> {
   // Retry indefinitely on 429, with exponential backoff cap
@@ -20,9 +18,22 @@ async function getSystemWithRetry(page: Page): Promise<any> {
   }
 }
 
+async function postWithRateLimitRetry(page: Page, url: string, options: Parameters<Page["request"]["post"]>[1]): Promise<APIResponse> {
+  // The limiter rejects with 429 *before* processing the request, so a retry
+  // is safe. Honor Retry-After (capped) like getSystemWithRetry does.
+  for (let attempt = 0; ; attempt++) {
+    const response = await page.request.post(url, options);
+    if (response.status() !== 429) {
+      return response;
+    }
+    const retryAfter = parseInt(response.headers()["retry-after"] || "1", 10);
+    await page.waitForTimeout(Math.min(retryAfter * 1000, 10000));
+  }
+}
+
 export async function registerAcknowledgedUser(page: Page, prefix: string, name: string): Promise<string> {
   const email = `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000)}@example.com`;
-  const registration = await page.request.post("/api/v1/auth/register", {
+  const registration = await postWithRateLimitRetry(page, "/api/v1/auth/register", {
     data: { name, email, password: "StockPilot!E2E2026", date_of_birth: "1990-01-01" },
   });
   expect(registration.ok()).toBeTruthy();
@@ -33,9 +44,9 @@ export async function registerAcknowledgedUser(page: Page, prefix: string, name:
     throw new Error(`/api/v1/system failed with ${system.status()}: ${body}`);
   }
   const version = (await system.json()).research_acknowledgment.version;
-  const acknowledgment = await page.request.post("/api/v1/auth/research-acknowledgment", {
+  const acknowledgment = await postWithRateLimitRetry(page, "/api/v1/auth/research-acknowledgment", {
     data: { version, accepted: true },
-    headers: { Origin: ORIGIN },
+    headers: { Origin: new URL(registration.url()).origin },
   });
   expect(acknowledgment.ok(), `Acknowledgment ${acknowledgment.status()}: ${await acknowledgment.text()}`).toBeTruthy();
   return email;

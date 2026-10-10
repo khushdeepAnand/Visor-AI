@@ -1,0 +1,13 @@
+{
+  "status": "passed_local_sqlite_repository_load",
+  "backend": "sqlite",
+  "workers": 16,
+  "operations": 400,
+  "persisted_rows": 400,
+  "elapsed_seconds": 3.20994490000885,
+  "operations_per_second": 124.61273089108077,
+  "median_latency_ms": 131.3356000027852,
+  "p95_latency_ms": 211.42899998812936,
+  "integrity": "ok",
+  "scope": "Disposable real SQLite DB, synthetic workload; not API/multi-process/Postgres/Redis or production-shape acceptance"
+}

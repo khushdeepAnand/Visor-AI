@@ -4,6 +4,7 @@ import pytest
 
 import database
 from services.paper_trading_v6 import estimate_margin, place_order
+from services.market_data.manager import MANAGER
 
 
 def _user(temp_db):
@@ -33,6 +34,36 @@ def test_margin_approximation_distinguishes_equity_future_and_option():
     assert equity == 5000
     assert future == 900
     assert long_option == 500
+
+
+@pytest.mark.parametrize("symbol", ["RELIANCE", "RELIANCE.NS", "RELIANCE.BO", "reliance.ns", " RELIANCE.BO ", "TCS", "TCS.NS", "TCS.BO", "NIFTY 50"])
+@pytest.mark.parametrize("supplied", [True, False])
+def test_order_context_round_trips_submitted_symbol(temp_db, monkeypatch, symbol, supplied):
+    from services.market_data.context import build_market_context
+    from services.market_data.instruments import CATALOGUE
+    from types import SimpleNamespace
+
+    normalized = MANAGER.normalize_symbol(symbol)
+    def quote_for(requested, timeframe):
+        return SimpleNamespace(to_dict=lambda: {
+            "price": 100.0, "previous_close": 100.0,
+            "context": build_market_context(requested_symbol=requested, instrument=CATALOGUE.resolve(normalized),
+                provider="test", credential_mode="test", timeframe=timeframe, as_of=None,
+                is_live=False, is_stale=False, fallback_used=False, fallback_reason=None),
+        })
+    monkeypatch.setattr(MANAGER, "get_quote", quote_for)
+    user_id = _user(temp_db)
+    before = database.get_connection()
+    for side in ("BUY", "SELL"):
+        result = place_order(user_id=user_id, symbol=symbol, side=side, quantity=1, timeframe="5m",
+            market_quote={"price": 100.0, "previous_close": 100.0} if supplied else None)
+        assert result["status"] == "FILLED"
+        assert result["symbol"] == normalized
+        assert result["context"]["requested_symbol"] == symbol
+        assert result["context"]["timeframe"] == "5m"
+    assert before.execute("SELECT COUNT(*) FROM paper_positions WHERE user_id=?", (user_id,)).fetchone()[0] == 0
+    assert before.execute("SELECT cash_balance FROM paper_accounts WHERE user_id=?", (user_id,)).fetchone()[0] == pytest.approx(1000000 - .09)
+    before.close()
 
 
 def test_leaderboard_requires_explicit_opt_in(temp_db):

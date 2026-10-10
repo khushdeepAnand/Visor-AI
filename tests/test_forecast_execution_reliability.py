@@ -29,6 +29,15 @@ PASSWORD = "StrongPass9!x"
 ORIGIN = "http://localhost:3000"
 
 
+@pytest.fixture(autouse=True)
+def isolated_optional_market_context(monkeypatch):
+    # These worker/contract tests inject the primary forecaster. Its optional
+    # contextual feeds must also be isolated from workstation provider secrets.
+    monkeypatch.setattr(api_deps, "_fetch_index_history", lambda *_args: None)
+    monkeypatch.setattr(api_deps, "_fetch_vix_history", lambda *_args: None)
+    monkeypatch.setattr(api_deps, "_expected_move_for_symbol", lambda *_args: None)
+
+
 def _frame(rows: int = 20) -> pd.DataFrame:
     index = pd.date_range("2026-01-01", periods=rows, freq="D", tz="UTC")
     close = np.linspace(100.0, 110.0, rows)

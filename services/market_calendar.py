@@ -30,6 +30,25 @@ CLOSE = time(15, 30)
 
 # NSE Capital Market circular NSE/CMTR/71775, 12-Dec-2025.
 BUNDLED_HOLIDAYS: dict[int, dict[date, str]] = {
+    # NSE/CMTR/65587, fetched and text-reviewed 2026-10-09.
+    # https://nsearchives.nseindia.com/content/circulars/CMTR65587.pdf
+    # SHA256: 1e0f85615fbbcde9243dd6cafbbad4d9b581b8d2467fd9e27c0a4fe42a720c7d
+    2025: {
+        date(2025, 2, 26): "Mahashivratri",
+        date(2025, 3, 14): "Holi",
+        date(2025, 3, 31): "Id-Ul-Fitr (Ramadan Eid)",
+        date(2025, 4, 10): "Shri Mahavir Jayanti",
+        date(2025, 4, 14): "Dr. Baba Saheb Ambedkar Jayanti",
+        date(2025, 4, 18): "Good Friday",
+        date(2025, 5, 1): "Maharashtra Day",
+        date(2025, 8, 15): "Independence Day",
+        date(2025, 8, 27): "Ganesh Chaturthi",
+        date(2025, 10, 2): "Mahatma Gandhi Jayanti/Dussehra",
+        date(2025, 10, 21): "Diwali Laxmi Pujan — Muhurat timing excluded from regular sessions",
+        date(2025, 10, 22): "Diwali-Balipratipada",
+        date(2025, 11, 5): "Prakash Gurpurb Sri Guru Nanak Dev",
+        date(2025, 12, 25): "Christmas",
+    },
     2026: {
         date(2026, 1, 15): "Municipal Corporation Elections in Maharashtra",
         date(2026, 1, 26): "Republic Day",

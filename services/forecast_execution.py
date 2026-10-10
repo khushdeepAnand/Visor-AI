@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import os
 import threading
 import time
@@ -70,6 +71,10 @@ class ForecastExecutionService:
         digest.update(str(window).strip().lower().encode("utf-8"))
         digest.update(format(float(confidence), ".8g").encode("ascii"))
         digest.update(str(engine_version).encode("utf-8"))
+        from forecasting.live_decay import tier_controls
+        from forecasting.model_promotion import active_promotion_receipt
+        digest.update(json.dumps({"controls": tier_controls(), "promotion": active_promotion_receipt()},
+                                 sort_keys=True, default=str).encode("utf-8"))
         digest.update("\x1f".join(map(str, frame.columns)).encode("utf-8"))
         digest.update("\x1f".join(map(str, frame.dtypes)).encode("utf-8"))
         hashed_values = pd.util.hash_pandas_object(frame, index=True).values

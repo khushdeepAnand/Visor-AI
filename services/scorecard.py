@@ -13,6 +13,47 @@ from forecasting.drift_monitor import compute_group_quality
 from forecasting.model_promotion import active_promotion_receipt
 
 
+def _next_day_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    # A one-minute next-bar forecast is not a next-day forecast.
+    daily = [row for row in rows if row["horizon_sessions"] == 1 and row["timeframe"] == "1D"]
+    n = len(daily)
+    model_error = naive_error = 0.0
+    for group in _daily_groups(daily):
+        ordered = sorted(group, key=lambda row: (str(row.get("target_timestamp") or ""), row.get("id", 0)))
+        for previous, row in zip(ordered, ordered[1:]):
+            if row.get("forecast_median") is not None and row.get("actual_price") is not None and previous.get("actual_price") is not None:
+                model_error += abs(float(row["actual_price"]) - float(row["forecast_median"]))
+                naive_error += abs(float(row["actual_price"]) - float(previous["actual_price"]))
+    pinball = []
+    for row in daily:
+        alpha = 1 - float(row["confidence_level"])
+        losses = []
+        for q, key in ((alpha / 2, "forecast_low"), (.5, "forecast_median"), (1 - alpha / 2, "forecast_high")):
+            if row.get(key) is None or row.get("actual_price") is None:
+                break
+            error = float(row["actual_price"]) - float(row[key])
+            losses.append(max(q * error, (q - 1) * error))
+        if len(losses) == 3:
+            pinball.append(sum(losses) / 3)
+    return {"horizon_sessions": 1, "timeframe": "1D", "total_forecasts": n,
+            "evidence_tier": "substantial" if n >= 100 else "limited" if n >= 30 else "insufficient",
+            "coverage": round(sum(row["coverage_hit"] for row in daily) / n, 4) if n else None,
+            "target_coverage": round(sum(float(row["confidence_level"]) for row in daily) / n, 4) if n else None,
+            "winkler_score": round(sum(row["winkler_score"] for row in daily) / n, 4) if n else None,
+            "mase": round(model_error / naive_error, 4) if naive_error > 0 else None,
+            "mean_pinball_loss": round(sum(pinball) / len(pinball), 4) if pinball else None,
+            "data_tiers": {tier: sum(row["tier"] == tier for row in daily) for tier in sorted({row["tier"] for row in daily})},
+            "specialist_status": "research_only_pending_next_day_promotion",
+            "basis": "Automatically settled daily horizon=1 forecasts only; sample tier is not a passed promotion gate."}
+
+
+def _daily_groups(rows: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        groups.setdefault(row["symbol"], []).append(row)
+    return list(groups.values())
+
+
 def build_public_scorecard(
     *,
     tier_filter: str | None = None,
@@ -50,11 +91,13 @@ def build_public_scorecard(
             row["mae"] = quality["model_mae"]
             row["directional_accuracy"] = quality["directional_accuracy"]
 
+    next_day = _next_day_summary(rows)
     if not rows:
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "disclaimer": "No settled forecasts available yet.",
             "tiers": {},
+            "next_day": next_day,
             "overall": {
                 "total_forecasts": 0,
                 "coverage": None,
@@ -176,6 +219,7 @@ def build_public_scorecard(
             "Missing tier metadata is unknown; insufficient evidence is not a passed promotion gate."
         ),
         "tiers": tier_results,
+        "next_day": next_day,
         "overall": overall,
         "conditional_coverage": conditional_overall,
         "promotion_gates": promotion_gates,

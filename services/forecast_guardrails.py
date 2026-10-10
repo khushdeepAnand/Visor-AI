@@ -27,6 +27,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from services.db.base import DatabaseInterface
+from services.db.sqlite_impl import SQLiteDatabase
+from services.db.factory import get_database
+from services.db.configuration import postgres_selected
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable, Sequence
@@ -266,13 +270,23 @@ class GuardrailStore:
         self._factory = connection_factory
 
     # -- infrastructure ----------------------------------------------------
-    def _connect(self) -> sqlite3.Connection:
+    def _connect(self) -> DatabaseInterface:
+        if self._factory is None and postgres_selected():
+            db = get_database()
+            try:
+                db.fetchall("SELECT id FROM forecast_kill_switches LIMIT 0")
+                db.fetchall("SELECT name FROM feature_flag_state LIMIT 0")
+                db.fetchall("SELECT id FROM status_banners LIMIT 0")
+                return db
+            except Exception:
+                db.close()
+                raise
         factory = self._factory or _default_get_connection
         if factory is None:  # pragma: no cover - only in a broken install
             raise GuardrailError("No database connection factory is available.")
         connection = factory()
         self._ensure_schema(connection)
-        return connection
+        return SQLiteDatabase(connection)
 
     @staticmethod
     def _ensure_schema(connection: sqlite3.Connection) -> None:
@@ -368,19 +382,21 @@ class GuardrailStore:
         expires_at = now + timedelta(hours=hours)
         connection = self._connect()
         try:
-            active = connection.execute(
-                "SELECT COUNT(*) FROM forecast_kill_switches WHERE revoked_at IS NULL AND expires_at > ?",
+            connection.begin_write("forecast-kill-switches")
+            active_row = connection.fetchone(connection.sql(
+                "SELECT COUNT(*) AS n FROM forecast_kill_switches WHERE revoked_at IS NULL AND expires_at > ?"),
                 (_iso(now),),
-            ).fetchone()[0]
+            )
+            active = int(active_row["n"]) if active_row else 0
             if int(active) >= MAX_ACTIVE_KILL_SWITCHES:
                 raise GuardrailError("Too many active kill switches; revoke stale entries first.")
-            cursor = connection.execute(
+            cursor = connection.execute(connection.sql(
                 """INSERT INTO forecast_kill_switches(scope, target, reason, created_by, created_at, expires_at)
-                   VALUES(?,?,?,?,?,?)""",
+                   VALUES(?,?,?,?,?,?) RETURNING id"""),
                 (normalized_scope, normalized_target, clean_reason, actor_email, _iso(now), _iso(expires_at)),
             )
+            switch_id = int(cursor.fetchone()["id"])
             connection.commit()
-            switch_id = int(cursor.lastrowid or 0)
         finally:
             connection.close()
 
@@ -414,20 +430,21 @@ class GuardrailStore:
         now = _utc_now()
         connection = self._connect()
         try:
-            row = connection.execute(
-                "SELECT id, scope, target, revoked_at FROM forecast_kill_switches WHERE id=?",
+            connection.begin_write("forecast-kill-switches")
+            row = connection.fetchone(connection.sql(
+                "SELECT id, scope, target, revoked_at FROM forecast_kill_switches WHERE id=?"),
                 (int(switch_id),),
-            ).fetchone()
+            )
             if row is None:
                 raise GuardrailError("That kill switch does not exist.")
-            if row[3] is not None:
+            if row["revoked_at"] is not None:
                 raise GuardrailError("That kill switch was already revoked.")
-            connection.execute(
-                "UPDATE forecast_kill_switches SET revoked_at=?, revoked_by=?, revoke_reason=? WHERE id=?",
+            connection.execute(connection.sql(
+                "UPDATE forecast_kill_switches SET revoked_at=?, revoked_by=?, revoke_reason=? WHERE id=?"),
                 (_iso(now), actor_email, clean_reason, int(switch_id)),
             )
             connection.commit()
-            scope, target = row[1], row[2]
+            scope, target = row["scope"], row["target"]
         finally:
             connection.close()
 
@@ -443,17 +460,17 @@ class GuardrailStore:
     def list_kill_switches(self, *, include_inactive: bool = False) -> list[dict[str, Any]]:
         connection = self._connect()
         try:
-            rows = connection.execute(
+            rows = connection.fetchall(
                 """SELECT id, scope, target, reason, created_by, created_at, expires_at,
                           revoked_at, revoked_by, revoke_reason
                    FROM forecast_kill_switches ORDER BY id DESC LIMIT 500"""
-            ).fetchall()
+            )
         finally:
             connection.close()
         now = _utc_now()
         result: list[dict[str, Any]] = []
         for row in rows:
-            switch = KillSwitch(*row).as_dict()
+            switch = KillSwitch(**row).as_dict()
             expires = _parse_iso(switch["expires_at"])
             expired = expires is not None and expires <= now
             switch["expired"] = expired
@@ -508,11 +525,11 @@ class GuardrailStore:
         connection = self._connect()
         try:
             rows = {
-                str(row[0]): row
-                for row in connection.execute(
+                str(row["name"]): row
+                for row in connection.fetchall(
                     """SELECT name, enabled, rollout_percent, updated_by, updated_at, reason,
                               auto_rolled_back_at, auto_rollback_detail FROM feature_flag_state"""
-                ).fetchall()
+                )
             }
         finally:
             connection.close()
@@ -524,13 +541,13 @@ class GuardrailStore:
                     "name": name,
                     "description": spec["description"],
                     "default": bool(spec["default"]),
-                    "enabled": bool(row[1]) if row else bool(spec["default"]),
-                    "rollout_percent": int(row[2]) if row else (100 if spec["default"] else 0),
-                    "updated_by": row[3] if row else None,
-                    "updated_at": row[4] if row else None,
-                    "reason": row[5] if row else None,
-                    "auto_rolled_back_at": row[6] if row else None,
-                    "auto_rollback_detail": json.loads(row[7]) if row and row[7] else None,
+                    "enabled": bool(row["enabled"]) if row else bool(spec["default"]),
+                    "rollout_percent": int(row["rollout_percent"]) if row else (100 if spec["default"] else 0),
+                    "updated_by": row["updated_by"] if row else None,
+                    "updated_at": row["updated_at"] if row else None,
+                    "reason": row["reason"] if row else None,
+                    "auto_rolled_back_at": row["auto_rolled_back_at"] if row else None,
+                    "auto_rollback_detail": json.loads(row["auto_rollback_detail"]) if row and row["auto_rollback_detail"] else None,
                     "max_failure_rate": spec["max_failure_rate"],
                     "min_samples": spec["min_samples"],
                 }
@@ -566,7 +583,8 @@ class GuardrailStore:
         now = _iso(_utc_now())
         connection = self._connect()
         try:
-            connection.execute(
+            connection.begin_write("feature-flag:" + key)
+            connection.execute(connection.sql(
                 """INSERT INTO feature_flag_state(name, enabled, rollout_percent, updated_by, updated_at, reason,
                                                   auto_rolled_back_at, auto_rollback_detail)
                    VALUES(?,?,?,?,?,?,NULL,NULL)
@@ -577,7 +595,7 @@ class GuardrailStore:
                        updated_at=excluded.updated_at,
                        reason=excluded.reason,
                        auto_rolled_back_at=NULL,
-                       auto_rollback_detail=NULL""",
+                        auto_rollback_detail=NULL"""),
                 (key, 1 if is_enabled else 0, percent, actor_email, now, clean_reason),
             )
             connection.commit()
@@ -644,7 +662,8 @@ class GuardrailStore:
         detail = {"samples": total, "failures": bad, "failure_rate": round(rate, 4), "budget": spec["max_failure_rate"]}
         connection = self._connect()
         try:
-            connection.execute(
+            connection.begin_write("feature-flag:" + key)
+            connection.execute(connection.sql(
                 """INSERT INTO feature_flag_state(name, enabled, rollout_percent, updated_by, updated_at, reason,
                                                   auto_rolled_back_at, auto_rollback_detail)
                    VALUES(?,0,0,?,?,?,?,?)
@@ -654,7 +673,7 @@ class GuardrailStore:
                        updated_at=excluded.updated_at,
                        reason=excluded.reason,
                        auto_rolled_back_at=excluded.auto_rolled_back_at,
-                       auto_rollback_detail=excluded.auto_rollback_detail""",
+                        auto_rollback_detail=excluded.auto_rollback_detail"""),
                 (
                     key,
                     actor_email or "system:auto-rollback",
@@ -711,13 +730,13 @@ class GuardrailStore:
         now = _iso(_utc_now())
         connection = self._connect()
         try:
-            cursor = connection.execute(
+            cursor = connection.execute(connection.sql(
                 """INSERT INTO status_banners(level, headline, body, starts_at, ends_at, published, created_by, created_at)
-                   VALUES(?,?,?,?,?,0,?,?)""",
+                   VALUES(?,?,?,?,?,0,?,?) RETURNING id"""),
                 (level_key, clean_headline, clean_body, _iso(start), _iso(end), actor_email, now),
             )
+            banner_id = int(cursor.fetchone()["id"])
             connection.commit()
-            banner_id = int(cursor.lastrowid or 0)
         finally:
             connection.close()
 
@@ -752,16 +771,17 @@ class GuardrailStore:
         now = _iso(_utc_now())
         connection = self._connect()
         try:
-            row = connection.execute(
-                "SELECT id, published, withdrawn_at FROM status_banners WHERE id=?",
+            connection.begin_write("status-banner:" + str(int(banner_id)))
+            row = connection.fetchone(connection.sql(
+                "SELECT id, published, withdrawn_at FROM status_banners WHERE id=?"),
                 (int(banner_id),),
-            ).fetchone()
+            )
             if row is None:
                 raise GuardrailError("That banner does not exist.")
-            if row[2] is not None:
+            if row["withdrawn_at"] is not None:
                 raise GuardrailError("That banner was withdrawn; draft a new one.")
-            connection.execute(
-                "UPDATE status_banners SET published=1, published_by=?, published_at=? WHERE id=?",
+            connection.execute(connection.sql(
+                "UPDATE status_banners SET published=1, published_by=?, published_at=? WHERE id=?"),
                 (actor_email, now, int(banner_id)),
             )
             connection.commit()
@@ -786,8 +806,9 @@ class GuardrailStore:
         now = _iso(_utc_now())
         connection = self._connect()
         try:
-            updated = connection.execute(
-                "UPDATE status_banners SET published=0, withdrawn_at=? WHERE id=? AND withdrawn_at IS NULL",
+            connection.begin_write("status-banner:" + str(int(banner_id)))
+            updated = connection.execute(connection.sql(
+                "UPDATE status_banners SET published=0, withdrawn_at=? WHERE id=? AND withdrawn_at IS NULL"),
                 (now, int(banner_id)),
             ).rowcount
             connection.commit()
@@ -809,26 +830,26 @@ class GuardrailStore:
         moment = (at or _utc_now()).astimezone(timezone.utc)
         connection = self._connect()
         try:
-            rows = connection.execute(
+            rows = connection.fetchall(
                 """SELECT id, level, headline, body, starts_at, ends_at FROM status_banners
                    WHERE published=1 AND withdrawn_at IS NULL ORDER BY id DESC LIMIT 20"""
-            ).fetchall()
+            )
         finally:
             connection.close()
         banners: list[dict[str, Any]] = []
         for row in rows:
-            starts, ends = _parse_iso(row[4]), _parse_iso(row[5])
+            starts, ends = _parse_iso(row["starts_at"]), _parse_iso(row["ends_at"])
             if starts is None or ends is None:
                 continue
             if starts <= moment < ends:
                 banners.append(
                     {
-                        "id": row[0],
-                        "level": row[1],
-                        "headline": row[2],
-                        "body": row[3],
-                        "starts_at": row[4],
-                        "ends_at": row[5],
+                        "id": row["id"],
+                        "level": row["level"],
+                        "headline": row["headline"],
+                        "body": row["body"],
+                        "starts_at": row["starts_at"],
+                        "ends_at": row["ends_at"],
                     }
                 )
         return banners
@@ -836,11 +857,11 @@ class GuardrailStore:
     def list_banners(self) -> list[dict[str, Any]]:
         connection = self._connect()
         try:
-            rows = connection.execute(
+            rows = connection.fetchall(
                 """SELECT id, level, headline, body, starts_at, ends_at, published, created_by, created_at,
                           published_by, published_at, withdrawn_at
                    FROM status_banners ORDER BY id DESC LIMIT 200"""
-            ).fetchall()
+            )
         finally:
             connection.close()
         keys = (
@@ -859,7 +880,7 @@ class GuardrailStore:
         )
         result = []
         for row in rows:
-            item = dict(zip(keys, row))
+            item = dict(row)
             item["published"] = bool(item["published"])
             result.append(item)
         return result

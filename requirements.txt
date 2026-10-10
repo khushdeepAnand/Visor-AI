@@ -1,6 +1,7 @@
 # StockPilot AI v6 backend/runtime dependencies
 # Python 3.12 is required by the Windows launchers and verified release workflow.
 pandas>=2.2,<4.0
+pandera[pandas]==0.27.1
 numpy>=2.0,<2.5
 scikit-learn>=1.5,<2.0
 joblib>=1.4,<2.0

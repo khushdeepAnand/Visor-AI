@@ -14,7 +14,8 @@ import pyotp
 from cryptography.fernet import Fernet, InvalidToken
 
 from authentication import get_user_by_id, login_user, register_user
-from database import get_connection
+from services.db.factory import dao_session
+from services.db.configuration import postgres_selected
 
 JWT_ALGORITHM = "HS256"
 TOKEN_TTL_HOURS = int(os.getenv("STOCKPILOT_SESSION_HOURS", "12"))
@@ -82,7 +83,9 @@ def create_access_token(user: dict[str, Any], request: Any | None = None) -> str
     now = datetime.now(timezone.utc)
     expires = now + timedelta(hours=TOKEN_TTL_HOURS)
     jti = secrets.token_urlsafe(32)
-    current = get_user_by_id(int(user["id"])) or user
+    current = get_user_by_id(int(user["id"]))
+    if current is None:
+        raise RuntimeError("Account cannot be loaded for session issuance.")
     token_version = int(current.get("token_version", 0))
     payload = {
         "sub": str(user["id"]),
@@ -96,10 +99,10 @@ def create_access_token(user: dict[str, Any], request: Any | None = None) -> str
         "ver": token_version,
     }
     token = jwt.encode(payload, _secret(), algorithm=JWT_ALGORITHM)
-    connection = get_connection()
-    try:
-        connection.execute(
-            "INSERT INTO auth_sessions(user_id,jti_hash,token_version,issued_at,expires_at,device_label) VALUES(?,?,?,?,?,?)",
+    with dao_session() as factory:
+        db = factory.db
+        db.execute(db.sql(
+            "INSERT INTO auth_sessions(user_id,jti_hash,token_version,issued_at,expires_at,device_label) VALUES(?,?,?,?,?,?)"),
             (
                 int(user["id"]),
                 _hash_jti(jti),
@@ -109,9 +112,7 @@ def create_access_token(user: dict[str, Any], request: Any | None = None) -> str
                 _device_label(request),
             ),
         )
-        connection.commit()
-    finally:
-        connection.close()
+        db.commit()
     return token
 
 
@@ -143,30 +144,26 @@ def user_from_token(token: str) -> dict[str, Any] | None:
     user = get_user_by_id(int(payload["sub"]))
     if not user or user.get("account_status") != "active" or int(payload.get("ver", -1)) != int(user.get("token_version", 0)):
         return None
-    connection = get_connection()
-    try:
-        session = connection.execute(
-            "SELECT revoked_at FROM auth_sessions WHERE user_id=? AND jti_hash=? AND token_version=?",
+    with dao_session() as factory:
+        db = factory.db
+        session = db.fetchone(db.sql(
+            "SELECT revoked_at FROM auth_sessions WHERE user_id=? AND jti_hash=? AND token_version=?"),
             (int(user["id"]), _hash_jti(str(payload.get("jti") or "")), int(payload.get("ver", -1))),
-        ).fetchone()
-    finally:
-        connection.close()
-    if session is None or session[0] is not None:
+        )
+    if session is None or session["revoked_at"] is not None:
         return None
     return user
 
 
 def revoke_token(token: str) -> None:
     payload = decode_access_token(token)
-    connection = get_connection()
-    try:
-        connection.execute(
-            "UPDATE auth_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE user_id=? AND jti_hash=?",
+    with dao_session() as factory:
+        db = factory.db
+        db.execute(db.sql(
+            "UPDATE auth_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE user_id=? AND jti_hash=?"),
             (int(payload["sub"]), _hash_jti(str(payload.get("jti") or ""))),
         )
-        connection.commit()
-    finally:
-        connection.close()
+        db.commit()
 
 
 def list_sessions(user_id: int, token: str | None = None) -> list[dict[str, Any]]:
@@ -176,62 +173,55 @@ def list_sessions(user_id: int, token: str | None = None) -> list[dict[str, Any]
             current_jti_hash = _hash_jti(str(decode_access_token(token).get("jti") or ""))
         except ValueError:
             pass
-    connection = get_connection()
-    try:
-        rows = connection.execute(
-            "SELECT id,issued_at,expires_at,revoked_at,device_label,jti_hash FROM auth_sessions WHERE user_id=? ORDER BY id DESC LIMIT 50",
+    with dao_session() as factory:
+        db = factory.db
+        rows = db.fetchall(db.sql(
+            "SELECT id,issued_at,expires_at,revoked_at,device_label,jti_hash FROM auth_sessions WHERE user_id=? ORDER BY id DESC LIMIT 50"),
             (int(user_id),),
-        ).fetchall()
+        )
         return [
             {
-                "id": row[0],
-                "issued_at": row[1],
-                "expires_at": row[2],
-                "revoked_at": row[3],
-                "device_label": row[4] or "Unknown device",
-                "current": current_jti_hash is not None and hmac.compare_digest(str(row[5]), current_jti_hash),
+                "id": row["id"],
+                "issued_at": row["issued_at"],
+                "expires_at": row["expires_at"],
+                "revoked_at": row["revoked_at"],
+                "device_label": row["device_label"] or "Unknown device",
+                "current": current_jti_hash is not None and hmac.compare_digest(str(row["jti_hash"]), current_jti_hash),
             }
             for row in rows
         ]
-    finally:
-        connection.close()
 
 
 def revoke_session(user_id: int, session_id: int) -> bool:
-    connection = get_connection()
-    try:
-        cursor = connection.execute(
-            "UPDATE auth_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=? AND revoked_at IS NULL",
+    with dao_session() as factory:
+        db = factory.db
+        cursor = db.execute(db.sql(
+            "UPDATE auth_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=? AND revoked_at IS NULL"),
             (int(session_id), int(user_id)),
         )
-        connection.commit()
+        db.commit()
         return cursor.rowcount > 0
-    finally:
-        connection.close()
 
 
 def revoke_all_sessions(user_id: int) -> None:
-    connection = get_connection()
-    try:
-        connection.execute("UPDATE users SET token_version=token_version+1 WHERE id=?", (int(user_id),))
-        connection.execute("UPDATE auth_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE user_id=? AND revoked_at IS NULL", (int(user_id),))
-        connection.commit()
-    finally:
-        connection.close()
+    with dao_session() as factory:
+        db = factory.db
+        db.begin_write("security:" + str(user_id))
+        db.execute(db.sql("UPDATE users SET token_version=token_version+1 WHERE id=?"), (int(user_id),))
+        db.execute(db.sql("UPDATE auth_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE user_id=? AND revoked_at IS NULL"), (int(user_id),))
+        db.commit()
 
 
 def revoke_other_sessions(user_id: int, token: str) -> None:
     payload = decode_access_token(token)
     current_jti_hash = _hash_jti(str(payload.get("jti") or ""))
-    connection = get_connection()
-    try:
-        connection.execute(
-            "UPDATE auth_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE user_id=? AND jti_hash<>? AND revoked_at IS NULL",
+    with dao_session() as factory:
+        db = factory.db
+        db.execute(db.sql(
+            "UPDATE auth_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE user_id=? AND jti_hash<>? AND revoked_at IS NULL"),
             (int(user_id), current_jti_hash),
         )
-        connection.commit()
-    finally:
-        connection.close()
+        db.commit()
 
 
 def _mfa_key_material() -> bytes:
@@ -272,30 +262,38 @@ def _new_recovery_codes() -> list[str]:
 
 
 def mfa_status(user_id: int) -> dict[str, Any]:
-    connection = get_connection()
-    try:
-        row = connection.execute(
-            "SELECT enabled FROM user_mfa WHERE user_id=?",
+    from services.webauthn import _ensure_table
+    _ensure_table()
+    with dao_session() as factory:
+        db = factory.db
+        row = db.fetchone(db.sql(
+            "SELECT enabled FROM user_mfa WHERE user_id=?"),
             (int(user_id),),
-        ).fetchone()
-        remaining = connection.execute(
-            "SELECT COUNT(*) FROM mfa_recovery_codes WHERE user_id=? AND used_at IS NULL",
+        )
+        remaining_row = db.fetchone(db.sql(
+            "SELECT COUNT(*) AS n FROM mfa_recovery_codes WHERE user_id=? AND used_at IS NULL"),
             (int(user_id),),
-        ).fetchone()[0]
-        return {"enabled": bool(row and row[0]), "recovery_codes_remaining": int(remaining or 0)}
-    finally:
-        connection.close()
+        )
+        passkey_row = db.fetchone(db.sql("SELECT COUNT(*) AS n FROM webauthn_credentials WHERE user_id=?"), (int(user_id),))
+        remaining = remaining_row["n"] if remaining_row else 0
+        passkeys = passkey_row["n"] if passkey_row else 0
+        return {"enabled": bool((row and row["enabled"]) or passkeys), "totp_enabled": bool(row and row["enabled"]),
+                "passkeys": int(passkeys), "recovery_codes_remaining": int(remaining or 0)}
 
 
 def begin_mfa_enrollment(user: dict[str, Any]) -> dict[str, str]:
-    if mfa_status(int(user["id"]))["enabled"]:
+    if mfa_status(int(user["id"]))["totp_enabled"]:
         raise ValueError("Multi-factor authentication is already enabled.")
     secret = pyotp.random_base32(length=32)
     encrypted = _encrypt_totp_secret(secret)
     now = datetime.now(timezone.utc).isoformat()
-    connection = get_connection()
-    try:
-        connection.execute(
+    with dao_session() as factory:
+        db = factory.db
+        db.begin_write("security:" + str(user["id"]))
+        current = db.fetchone(db.sql("SELECT enabled FROM user_mfa WHERE user_id=?"), (int(user["id"]),))
+        if current and current["enabled"]:
+            raise ValueError("Multi-factor authentication is already enabled.")
+        db.execute(db.sql(
             """
             INSERT INTO user_mfa(user_id,encrypted_totp_secret,enabled,last_totp_counter,updated_at)
             VALUES(?,?,0,NULL,?)
@@ -304,13 +302,11 @@ def begin_mfa_enrollment(user: dict[str, Any]) -> dict[str, str]:
                 enabled=0,
                 last_totp_counter=NULL,
                 updated_at=excluded.updated_at
-            """,
+            """),
             (int(user["id"]), encrypted, now),
         )
-        connection.execute("DELETE FROM mfa_recovery_codes WHERE user_id=?", (int(user["id"]),))
-        connection.commit()
-    finally:
-        connection.close()
+        db.execute(db.sql("DELETE FROM mfa_recovery_codes WHERE user_id=?"), (int(user["id"]),))
+        db.commit()
     uri = pyotp.TOTP(secret).provisioning_uri(
         name=str(user.get("email") or user["id"]),
         issuer_name="StockPilot AI",
@@ -333,16 +329,18 @@ def _matching_totp_counter(secret: str, code: str, *, now: datetime | None = Non
 
 
 def _verify_mfa_code(connection: Any, user_id: int, code: str, *, require_enabled: bool) -> tuple[bool, str | None]:
-    row = connection.execute(
-        "SELECT encrypted_totp_secret,enabled,last_totp_counter FROM user_mfa WHERE user_id=?",
+    query = "SELECT encrypted_totp_secret,enabled,last_totp_counter FROM user_mfa WHERE user_id=?"
+    if postgres_selected():
+        query += " FOR UPDATE"
+    row = connection.fetchone(connection.sql(query),
         (int(user_id),),
-    ).fetchone()
-    if row is None or (require_enabled and not bool(row[1])):
+    )
+    if row is None or (require_enabled and not bool(row["enabled"])):
         return False, None
-    counter = _matching_totp_counter(_decrypt_totp_secret(str(row[0])), code)
-    if counter is not None and (row[2] is None or counter > int(row[2])):
-        cursor = connection.execute(
-            "UPDATE user_mfa SET last_totp_counter=?,updated_at=? WHERE user_id=? AND (last_totp_counter IS NULL OR last_totp_counter<?)",
+    counter = _matching_totp_counter(_decrypt_totp_secret(str(row["encrypted_totp_secret"])), code)
+    if counter is not None and (row["last_totp_counter"] is None or counter > int(row["last_totp_counter"])):
+        cursor = connection.execute(connection.sql(
+            "UPDATE user_mfa SET last_totp_counter=?,updated_at=? WHERE user_id=? AND (last_totp_counter IS NULL OR last_totp_counter<?)"),
             (counter, datetime.now(timezone.utc).isoformat(), int(user_id), counter),
         )
         if cursor.rowcount == 1:
@@ -350,91 +348,81 @@ def _verify_mfa_code(connection: Any, user_id: int, code: str, *, require_enable
     if not require_enabled:
         return False, None
     code_hash = _recovery_hash(code)
-    recovery = connection.execute(
-        "SELECT id FROM mfa_recovery_codes WHERE user_id=? AND code_hash=? AND used_at IS NULL LIMIT 1",
+    recovery = connection.fetchone(connection.sql(
+        "SELECT id FROM mfa_recovery_codes WHERE user_id=? AND code_hash=? AND used_at IS NULL LIMIT 1"),
         (int(user_id), code_hash),
-    ).fetchone()
+    )
     if recovery is None:
         return False, None
-    cursor = connection.execute(
-        "UPDATE mfa_recovery_codes SET used_at=? WHERE id=? AND used_at IS NULL",
-        (datetime.now(timezone.utc).isoformat(), int(recovery[0])),
+    cursor = connection.execute(connection.sql(
+        "UPDATE mfa_recovery_codes SET used_at=? WHERE id=? AND used_at IS NULL"),
+        (datetime.now(timezone.utc).isoformat(), int(recovery["id"])),
     )
     return cursor.rowcount == 1, "recovery"
 
 
 def enable_mfa(user_id: int, code: str) -> list[str]:
-    connection = get_connection()
-    try:
-        connection.execute("BEGIN IMMEDIATE")
+    with dao_session() as factory:
+        connection = factory.db
+        connection.begin_write("security:" + str(user_id))
         valid, method = _verify_mfa_code(connection, user_id, code, require_enabled=False)
         if not valid or method != "totp":
             connection.rollback()
             raise ValueError("The verification code is invalid or expired.")
         recovery_codes = _new_recovery_codes()
-        connection.execute(
-            "UPDATE user_mfa SET enabled=1,updated_at=? WHERE user_id=?",
+        connection.execute(connection.sql(
+            "UPDATE user_mfa SET enabled=1,updated_at=? WHERE user_id=?"),
             (datetime.now(timezone.utc).isoformat(), int(user_id)),
         )
-        connection.executemany(
-            "INSERT INTO mfa_recovery_codes(user_id,code_hash) VALUES(?,?)",
-            [(int(user_id), _recovery_hash(code_value)) for code_value in recovery_codes],
-        )
+        for code_value in recovery_codes:
+            connection.execute(connection.sql("INSERT INTO mfa_recovery_codes(user_id,code_hash) VALUES(?,?)"),
+                               (int(user_id), _recovery_hash(code_value)))
         connection.commit()
         return recovery_codes
-    finally:
-        connection.close()
 
 
 def verify_current_mfa(user_id: int, code: str) -> str:
-    connection = get_connection()
-    try:
-        connection.execute("BEGIN IMMEDIATE")
+    with dao_session() as factory:
+        connection = factory.db
+        connection.begin_write("security:" + str(user_id))
         valid, method = _verify_mfa_code(connection, user_id, code, require_enabled=True)
         if not valid or method is None:
             connection.rollback()
             raise ValueError("The verification code is invalid or expired.")
         connection.commit()
         return method
-    finally:
-        connection.close()
 
 
 def regenerate_recovery_codes(user_id: int, code: str) -> list[str]:
-    connection = get_connection()
-    try:
-        connection.execute("BEGIN IMMEDIATE")
+    with dao_session() as factory:
+        connection = factory.db
+        connection.begin_write("security:" + str(user_id))
         valid, _ = _verify_mfa_code(connection, user_id, code, require_enabled=True)
         if not valid:
             connection.rollback()
             raise ValueError("The verification code is invalid or expired.")
         recovery_codes = _new_recovery_codes()
-        connection.execute("DELETE FROM mfa_recovery_codes WHERE user_id=?", (int(user_id),))
-        connection.executemany(
-            "INSERT INTO mfa_recovery_codes(user_id,code_hash) VALUES(?,?)",
-            [(int(user_id), _recovery_hash(code_value)) for code_value in recovery_codes],
-        )
+        connection.execute(connection.sql("DELETE FROM mfa_recovery_codes WHERE user_id=?"), (int(user_id),))
+        for code_value in recovery_codes:
+            connection.execute(connection.sql("INSERT INTO mfa_recovery_codes(user_id,code_hash) VALUES(?,?)"),
+                               (int(user_id), _recovery_hash(code_value)))
         connection.commit()
         return recovery_codes
-    finally:
-        connection.close()
 
 
 def disable_mfa(user_id: int, code: str) -> None:
-    connection = get_connection()
-    try:
-        connection.execute("BEGIN IMMEDIATE")
+    with dao_session() as factory:
+        connection = factory.db
+        connection.begin_write("security:" + str(user_id))
         valid, _ = _verify_mfa_code(connection, user_id, code, require_enabled=True)
         if not valid:
             connection.rollback()
             raise ValueError("The verification code is invalid or expired.")
-        connection.execute("DELETE FROM user_mfa WHERE user_id=?", (int(user_id),))
+        connection.execute(connection.sql("DELETE FROM user_mfa WHERE user_id=?"), (int(user_id),))
         connection.commit()
-    finally:
-        connection.close()
 
 
-def issue_mfa_challenge(user: dict[str, Any], *, next_path: str = "/") -> str:
+def issue_mfa_challenge(user: dict[str, Any], *, next_path: str = "/", device_hash: str | None = None) -> str:
     now = datetime.now(timezone.utc)
     expires = now + timedelta(minutes=MFA_CHALLENGE_MINUTES)
     jti = secrets.token_urlsafe(32)
@@ -448,25 +436,25 @@ def issue_mfa_challenge(user: dict[str, Any], *, next_path: str = "/") -> str:
         "jti": jti,
         "type": "mfa_challenge",
         "next": safe_next,
+        "device_hash": device_hash,
     }
     token = jwt.encode(payload, _secret(), algorithm=JWT_ALGORITHM)
-    connection = get_connection()
-    try:
-        connection.execute(
-            "UPDATE mfa_challenges SET consumed_at=? WHERE user_id=? AND consumed_at IS NULL",
+    with dao_session() as factory:
+        connection = factory.db
+        connection.begin_write("security:" + str(user["id"]))
+        connection.execute(connection.sql(
+            "UPDATE mfa_challenges SET consumed_at=? WHERE user_id=? AND consumed_at IS NULL"),
             (now.isoformat(), int(user["id"])),
         )
-        connection.execute(
-            "INSERT INTO mfa_challenges(user_id,jti_hash,expires_at) VALUES(?,?,?)",
+        connection.execute(connection.sql(
+            "INSERT INTO mfa_challenges(user_id,jti_hash,expires_at) VALUES(?,?,?)"),
             (int(user["id"]), _hash_jti(jti), expires.isoformat()),
         )
         connection.commit()
-    finally:
-        connection.close()
     return token
 
 
-def complete_mfa_challenge(token: str, code: str) -> tuple[dict[str, Any], str, str]:
+def complete_mfa_challenge(token: str, code: str, *, device_hash: str | None = None) -> tuple[dict[str, Any], str, str]:
     try:
         payload = jwt.decode(
             token,
@@ -479,47 +467,52 @@ def complete_mfa_challenge(token: str, code: str) -> tuple[dict[str, Any], str, 
         raise ValueError("The verification challenge is invalid or expired.") from exc
     if payload.get("type") != "mfa_challenge":
         raise ValueError("The verification challenge is invalid or expired.")
+    if payload.get("device_hash") and payload["device_hash"] != device_hash:
+        raise ValueError("Verification must complete on the device that started sign-in.")
     user_id = int(payload["sub"])
     now = datetime.now(timezone.utc)
-    connection = get_connection()
-    try:
-        connection.execute("BEGIN IMMEDIATE")
-        row = connection.execute(
-            "SELECT id,expires_at,failed_attempts,consumed_at FROM mfa_challenges WHERE user_id=? AND jti_hash=? LIMIT 1",
+    with dao_session() as factory:
+        connection = factory.db
+        connection.begin_write("security:" + str(user_id))
+        query = "SELECT id,expires_at,failed_attempts,consumed_at FROM mfa_challenges WHERE user_id=? AND jti_hash=? LIMIT 1"
+        if postgres_selected():
+            query += " FOR UPDATE"
+        row = connection.fetchone(connection.sql(query),
             (user_id, _hash_jti(str(payload.get("jti") or ""))),
-        ).fetchone()
-        if row is None or row[3] is not None or datetime.fromisoformat(str(row[1])).astimezone(timezone.utc) <= now:
+        )
+        if row is None or row["consumed_at"] is not None or datetime.fromisoformat(str(row["expires_at"])).astimezone(timezone.utc) <= now:
             connection.rollback()
             raise ValueError("The verification challenge is invalid or expired.")
-        if int(row[2] or 0) >= MFA_MAX_ATTEMPTS:
+        if int(row["failed_attempts"] or 0) >= MFA_MAX_ATTEMPTS:
             connection.rollback()
             raise ValueError("The verification challenge is invalid or expired.")
         valid, method = _verify_mfa_code(connection, user_id, code, require_enabled=True)
         if not valid or method is None:
-            failed_attempts = int(row[2] or 0) + 1
-            connection.execute(
-                "UPDATE mfa_challenges SET failed_attempts=?,consumed_at=CASE WHEN ?>=? THEN ? ELSE consumed_at END WHERE id=?",
-                (failed_attempts, failed_attempts, MFA_MAX_ATTEMPTS, now.isoformat(), int(row[0])),
+            failed_attempts = int(row["failed_attempts"] or 0) + 1
+            connection.execute(connection.sql(
+                "UPDATE mfa_challenges SET failed_attempts=?,consumed_at=CASE WHEN ?>=? THEN ? ELSE consumed_at END WHERE id=?"),
+                (failed_attempts, failed_attempts, MFA_MAX_ATTEMPTS, now.isoformat(), int(row["id"])),
             )
             connection.commit()
             raise ValueError("The verification code is invalid or expired.")
-        cursor = connection.execute(
-            "UPDATE mfa_challenges SET consumed_at=? WHERE id=? AND consumed_at IS NULL",
-            (now.isoformat(), int(row[0])),
+        cursor = connection.execute(connection.sql(
+            "UPDATE mfa_challenges SET consumed_at=? WHERE id=? AND consumed_at IS NULL"),
+            (now.isoformat(), int(row["id"])),
         )
         if cursor.rowcount != 1:
             connection.rollback()
             raise ValueError("The verification challenge is invalid or expired.")
         connection.commit()
-    finally:
-        connection.close()
     user = get_user_by_id(user_id)
     if not user or user.get("account_status") != "active":
         raise ValueError("The verification challenge is invalid or expired.")
+    if payload.get("device_hash"):
+        from services.login_anomaly import confirm_device
+        confirm_device(user_id, str(payload["device_hash"]))
     return user, str(payload.get("next") or "/"), method
 
 
-def consume_mfa_challenge_for_passkey(token: str) -> tuple[int, str]:
+def consume_mfa_challenge_for_passkey(token: str, *, device_hash: str | None = None) -> tuple[int, str]:
     """Validate + consume an MFA challenge when a passkey assertion succeeded.
 
     The passkey cryptography was verified separately by services.webauthn;
@@ -538,28 +531,33 @@ def consume_mfa_challenge_for_passkey(token: str) -> tuple[int, str]:
         raise ValueError("The verification challenge is invalid or expired.") from exc
     if payload.get("type") != "mfa_challenge":
         raise ValueError("The verification challenge is invalid or expired.")
+    if payload.get("device_hash") and payload["device_hash"] != device_hash:
+        raise ValueError("Verification must complete on the device that started sign-in.")
     user_id = int(payload["sub"])
     now = datetime.now(timezone.utc)
-    connection = get_connection()
-    try:
-        connection.execute("BEGIN IMMEDIATE")
-        row = connection.execute(
-            "SELECT id,expires_at,failed_attempts,consumed_at FROM mfa_challenges WHERE user_id=? AND jti_hash=? LIMIT 1",
+    with dao_session() as factory:
+        connection = factory.db
+        connection.begin_write("security:" + str(user_id))
+        query = "SELECT id,expires_at,failed_attempts,consumed_at FROM mfa_challenges WHERE user_id=? AND jti_hash=? LIMIT 1"
+        if postgres_selected():
+            query += " FOR UPDATE"
+        row = connection.fetchone(connection.sql(query),
             (user_id, _hash_jti(str(payload.get("jti") or ""))),
-        ).fetchone()
-        if row is None or row[3] is not None or datetime.fromisoformat(str(row[1])).astimezone(timezone.utc) <= now:
+        )
+        if row is None or row["consumed_at"] is not None or int(row["failed_attempts"] or 0) >= MFA_MAX_ATTEMPTS or datetime.fromisoformat(str(row["expires_at"])).astimezone(timezone.utc) <= now:
             connection.rollback()
             raise ValueError("The verification challenge is invalid or expired.")
-        cursor = connection.execute(
-            "UPDATE mfa_challenges SET consumed_at=? WHERE id=? AND consumed_at IS NULL",
-            (now.isoformat(), int(row[0])),
+        cursor = connection.execute(connection.sql(
+            "UPDATE mfa_challenges SET consumed_at=? WHERE id=? AND consumed_at IS NULL"),
+            (now.isoformat(), int(row["id"])),
         )
         if cursor.rowcount != 1:
             connection.rollback()
             raise ValueError("The verification challenge is invalid or expired.")
         connection.commit()
-    finally:
-        connection.close()
+    if payload.get("device_hash"):
+        from services.login_anomaly import confirm_device
+        confirm_device(user_id, str(payload["device_hash"]))
     return user_id, str(payload.get("next") or "/")
 
 

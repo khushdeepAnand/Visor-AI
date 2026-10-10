@@ -9,6 +9,33 @@ on:
     - cron: "23 3 * * *"
 
 jobs:
+  postgres-parity:
+    name: Live disposable PostgreSQL parity and migration rehearsal
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: stockpilot_test
+          POSTGRES_DB: stockpilot_test_ci
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U stockpilot_test -d stockpilot_test_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: sudo apt-get update && sudo apt-get install -y libsqlcipher-dev
+      - run: pip install -r requirements-dev.txt
+      - name: Live schema, DAO, RLS, concurrent writes and transfer/retry proof
+        env:
+          STOCKPILOT_ENV: test
+          DB_BACKEND: sqlite
+          DATABASE_MIGRATION_URL: postgresql://stockpilot_test@127.0.0.1:5432/stockpilot_test_ci
+        run: python scripts/verify_backend_parity.py --live
+
   promotion-gate:
     name: Promotion gate (fail closed)
     # Release tags must prove the live replay gate; ordinary CI remains offline.
@@ -112,6 +139,8 @@ jobs:
           pip install -r requirements-dev.txt
       - name: mypy
         run: python -m mypy --config-file mypy.ini .
+      - name: SQLite/Postgres DAO signature parity (no connections)
+        run: python scripts/verify_backend_parity.py
       - name: pip-audit
         run: python -m pip_audit --local
       - name: Bandit (generic backend SAST, fail on Medium+)
@@ -120,7 +149,8 @@ jobs:
         env:
           STOCKPILOT_ENV: test
           PYTHONIOENCODING: utf-8
-          STOCKPILOT_DATABASE_URL: postgresql+psycopg2://ci@127.0.0.1:5432/stockpilot
+          DB_BACKEND: postgresql
+          DATABASE_MIGRATION_URL: postgresql+psycopg2://ci@127.0.0.1:5432/stockpilot
         run: alembic upgrade head --sql > /dev/null
       - name: OpenAPI schema drift check
         env:
@@ -160,6 +190,9 @@ jobs:
       - name: Generated API client drift check
         working-directory: frontend
         run: npm run check:api
+      - name: Forecast rendering honesty
+        working-directory: frontend
+        run: npm run check:forecast-honesty
       - name: Typecheck
         working-directory: frontend
         run: npm run typecheck
@@ -172,6 +205,9 @@ jobs:
       - name: npm production audit
         working-directory: frontend
         run: npm run audit:prod
+      - name: npm development and build-tool audit
+        working-directory: frontend
+        run: npm run audit
       - name: Browser lifecycle and accessibility tests
         working-directory: frontend
         run: npm run test:e2e

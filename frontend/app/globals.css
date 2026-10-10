@@ -1,6 +1,16 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../tailwind.config.ts";
+
+/* Preserve v3 small-radius/shadow utilities while removing its vulnerable
+   globbing toolchain. Existing component names and semantic tokens stay valid. */
+@theme {
+  --radius-sm: 0.125rem;
+  --radius: 0.25rem;
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  --blur-sm: 4px;
+  --blur: 8px;
+}
 
 /* =========================================================================
    StockPilot "Ledger" design system (v10)

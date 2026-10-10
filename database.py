@@ -3,8 +3,16 @@ import json
 import math
 import os
 import sqlite3
+import psycopg2
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast, Optional
+
+
+def postgres_selected():
+    # Delay package initialization: services.db exports SQLite DAOs that import
+    # this module's legacy helpers. The selector itself has one shared owner.
+    from services.db.configuration import postgres_selected as selected
+    return selected()
 
 try:
     import sqlcipher3.dbapi2 as sqlcipher  # type: ignore[import-untyped]
@@ -12,6 +20,18 @@ try:
 except ImportError:
     sqlcipher = None
     SQLCIPHER_AVAILABLE = False
+
+# Both drivers expose DB-API exceptions, but their class hierarchies are distinct.
+DATABASE_ERRORS = (sqlite3.Error, psycopg2.Error) + ((sqlcipher.Error,) if sqlcipher else ())
+INTEGRITY_ERRORS = (sqlite3.IntegrityError, psycopg2.IntegrityError) + ((sqlcipher.IntegrityError,) if sqlcipher else ())
+OPERATIONAL_ERRORS = (sqlite3.OperationalError, psycopg2.OperationalError) + ((sqlcipher.OperationalError,) if sqlcipher else ())
+
+
+def database_row(cursor, values):
+    """Use the row type belonging to the cursor's actual DB-API driver."""
+    if isinstance(cursor, sqlite3.Cursor):
+        return sqlite3.Row(cursor, values)
+    return sqlcipher.Row(cursor, values)
 
 
 # ==========================================================
@@ -31,6 +51,10 @@ DATABASE = os.path.join(
     DATABASE_DIR,
     "stockpilot.db"
 )
+
+if os.getenv("STOCKPILOT_DATABASE_PATH"):
+    DATABASE = os.path.abspath(os.environ["STOCKPILOT_DATABASE_PATH"])
+    DATABASE_DIR = os.path.dirname(DATABASE)
 
 # SQLCipher encryption settings
 SQLCIPHER_KEY = os.getenv("STOCKPILOT_DB_ENCRYPTION_KEY")
@@ -57,10 +81,17 @@ def _get_encryption_key() -> Optional[bytes]:
     return None
 
 
-def _open_connection():
+def _open_connection(database_path=None):
     """Open a database connection with optional SQLCipher encryption."""
+    from services.db.configuration import postgres_selected
+    path = os.path.abspath(os.fspath(database_path) if database_path is not None else DATABASE)
+    if path == os.path.abspath(DATABASE) and postgres_selected():
+        raise RuntimeError(
+            "PostgreSQL application routing is not complete. Refusing to write the application SQLite database "
+            "while PostgreSQL is selected; keep DB_BACKEND=sqlite until end-to-end adoption is verified."
+        )
     os.makedirs(
-        DATABASE_DIR,
+        os.path.dirname(os.path.abspath(os.fspath(database_path) if database_path is not None else DATABASE)),
         exist_ok=True
     )
 
@@ -75,7 +106,7 @@ def _open_connection():
             )
         # Use SQLCipher for encrypted database
         conn = sqlcipher.connect(
-            DATABASE,
+            database_path if database_path is not None else DATABASE,
             timeout=30
         )
         
@@ -96,7 +127,7 @@ def _open_connection():
     else:
         # Standard SQLite connection
         conn = sqlite3.connect(
-            DATABASE,
+            database_path if database_path is not None else DATABASE,
             timeout=30
         )
 
@@ -126,6 +157,10 @@ def create_tables():
 
     Existing tables and data are preserved.
     """
+
+    if postgres_selected():
+        _verify_postgres_schema()
+        return
 
     conn = _open_connection()
     cursor = conn.cursor()
@@ -986,17 +1021,23 @@ def buy_stock(
             "Stock symbol is required."
         )
 
-    if shares <= 0:
+    if not math.isfinite(shares) or shares <= 0:
 
         raise ValueError(
             "Number of shares must be greater than zero."
         )
 
-    if buy_price < 0:
+    if not math.isfinite(buy_price) or buy_price < 0:
 
         raise ValueError(
             "Buy price cannot be negative."
         )
+
+    if postgres_selected():
+        from services.db.factory import dao_session
+        with dao_session() as factory:
+            factory.create_portfolio_dao().buy_holding(user_id, symbol, company, shares, buy_price)
+        return
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -1070,9 +1111,13 @@ def buy_stock(
 
 
 def get_portfolio(user_id):
-    """
-    Returns all portfolio holdings for the selected user.
-    """
+    """Returns all portfolio holdings for the selected user."""
+
+    if postgres_selected():
+        from services.db.factory import dao_session
+        with dao_session() as factory:
+            return [tuple(row[key] for key in ("id", "symbol", "company", "shares", "buy_price", "buy_date"))
+                    for row in factory.create_portfolio_dao().get_holdings(user_id)]
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -1119,9 +1164,12 @@ def delete_stock(
     stock_id,
     user_id
 ):
-    """
-    Deletes a portfolio holding belonging to the selected user.
-    """
+    """Deletes a portfolio holding belonging to the selected user."""
+
+    if postgres_selected():
+        from services.db.factory import dao_session
+        with dao_session() as factory:
+            return factory.create_portfolio_dao().delete_holding(stock_id, user_id)
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -1169,17 +1217,22 @@ def update_stock(
     shares = float(shares)
     buy_price = float(buy_price)
 
-    if shares <= 0:
+    if not math.isfinite(shares) or shares <= 0:
 
         raise ValueError(
             "Number of shares must be greater than zero."
         )
 
-    if buy_price < 0:
+    if not math.isfinite(buy_price) or buy_price < 0:
 
         raise ValueError(
             "Buy price cannot be negative."
         )
+
+    if postgres_selected():
+        from services.db.factory import dao_session
+        with dao_session() as factory:
+            return factory.create_portfolio_dao().update_holding(stock_id, user_id, shares, buy_price)
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -1232,10 +1285,15 @@ def sell_stock(
 
     shares = float(shares)
     sell_price = float(sell_price)
-    if shares <= 0:
+    if not math.isfinite(shares) or shares <= 0:
         raise ValueError("Number of shares sold must be greater than zero.")
-    if sell_price < 0:
+    if not math.isfinite(sell_price) or sell_price < 0:
         raise ValueError("Sale price cannot be negative.")
+
+    if postgres_selected():
+        from services.db.factory import dao_session
+        with dao_session() as factory:
+            return factory.create_portfolio_dao().sell_holding(stock_id, user_id, shares, sell_price)
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -1302,6 +1360,11 @@ def add_to_watchlist(
             "Stock symbol is required."
         )
 
+    if postgres_selected():
+        from services.db.factory import dao_session
+        with dao_session() as factory:
+            return factory.create_watchlist_dao().add_symbol(user_id, symbol)
+
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -1354,9 +1417,13 @@ def add_to_watchlist(
 
 
 def get_watchlist(user_id):
-    """
-    Returns all watchlist symbols for a user.
-    """
+    """Returns all watchlist symbols for a user."""
+
+    if postgres_selected():
+        from services.db.factory import dao_session
+        with dao_session() as factory:
+            return [tuple(row[key] for key in ("id", "symbol", "added_date"))
+                    for row in factory.create_watchlist_dao().get_watchlist(user_id)]
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -1393,9 +1460,12 @@ def remove_from_watchlist(
     watchlist_id,
     user_id
 ):
-    """
-    Removes a watchlist entry belonging to the user.
-    """
+    """Removes a watchlist entry belonging to the user."""
+
+    if postgres_selected():
+        from services.db.factory import dao_session
+        with dao_session() as factory:
+            return factory.create_watchlist_dao().remove_symbol(watchlist_id, user_id)
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -1431,9 +1501,13 @@ def get_transactions(
     user_id,
     limit=100
 ):
-    """
-    Returns recent portfolio transactions for a user.
-    """
+    """Returns recent portfolio transactions for a user."""
+
+    if postgres_selected():
+        from services.db.factory import dao_session
+        with dao_session() as factory:
+            return [tuple(row[key] for key in ("id", "symbol", "transaction_type", "shares", "price", "transaction_date"))
+                    for row in factory.create_transaction_dao().get_transactions(user_id, limit)]
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -1554,6 +1628,17 @@ def save_prediction(
     prediction_date = _serialize_prediction_date(prediction_date)
     payload_json = json.dumps(payload, default=str) if isinstance(payload, dict) else None
 
+    if postgres_selected():
+        from services.db.factory import dao_session
+        with dao_session() as factory:
+            factory.create_prediction_dao().save_prediction(
+                user_id, symbol, linear_prediction=linear_prediction,
+                decision_tree_prediction=decision_tree_prediction, random_forest_prediction=random_forest_prediction,
+                prediction_date=prediction_date, consensus_prediction=consensus_prediction,
+                best_model=best_model, model_version=model_version, payload=payload,
+            )
+        return
+
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -1627,6 +1712,12 @@ def save_prediction_once(
 def get_prediction_history(user_id, limit=50):
     """Return recent forecasts in the original tuple layout for UI compatibility."""
 
+    if postgres_selected():
+        from services.db.factory import dao_session
+        with dao_session() as factory:
+            return [tuple(row[key] for key in ("id", "symbol", "linear", "dt", "rf", "date"))
+                    for row in factory.create_prediction_dao().get_prediction_history(user_id, limit)]
+
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -1648,8 +1739,13 @@ def get_prediction_history(user_id, limit=50):
 def get_prediction_details(user_id, symbol=None, limit=50):
     """Return expanded JSON-aware prediction history for professional reporting."""
 
+    if postgres_selected():
+        from services.db.factory import dao_session
+        with dao_session() as factory:
+            return list(factory.create_prediction_dao().get_prediction_details(user_id, symbol, limit))
+
     conn = get_connection()
-    conn.row_factory = sqlite3.Row
+    conn.row_factory = database_row
     cursor = conn.cursor()
     params = [user_id]
     where = "WHERE user_id = ?"
@@ -1697,6 +1793,15 @@ def get_prediction_details(user_id, symbol=None, limit=50):
 def database_health_check():
     """Return a compact, non-sensitive database health report."""
 
+    if postgres_selected():
+        try:
+            _verify_postgres_schema()
+            return {"status": "Operational", "integrity": "schema_verified", "backend": "postgresql",
+                    "encryption": "server-managed; at-rest state not inspected", "sqlcipher_available": SQLCIPHER_AVAILABLE}
+        except Exception:
+            return {"status": "Unavailable", "integrity": "unknown", "backend": "postgresql",
+                    "encryption": "unknown", "sqlcipher_available": SQLCIPHER_AVAILABLE}
+
     try:
         conn = get_connection()
         cursor = conn.cursor()
@@ -1729,113 +1834,39 @@ def database_health_check():
         return {"status": "Unavailable", "integrity": "unknown", "encryption": "unknown", "sqlcipher_available": SQLCIPHER_AVAILABLE}
 
 
+def _verify_postgres_schema():
+    """Read-only application preflight. DDL belongs to direct-URL Alembic runs."""
+    from services.db.factory import dao_session
+    from services.db.base import APPLICATION_TABLES
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    config = Config(os.path.join(BASE_DIR, "alembic.ini"))
+    config.set_main_option("script_location", os.path.join(BASE_DIR, "alembic"))
+    expected = ScriptDirectory.from_config(config).get_current_head()
+    with dao_session() as factory:
+        db = factory.db
+        revision = db.fetchone("SELECT version_num FROM alembic_version")
+        if not revision or revision["version_num"] != expected:
+            raise RuntimeError("PostgreSQL migrations are not at the required head")
+        tables = {row["table_name"] for row in db.fetchall("SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema()")}
+        if not APPLICATION_TABLES <= tables:
+            raise RuntimeError("PostgreSQL application schema is incomplete")
+
+
 def encrypt_database(encryption_key: str) -> dict[str, Any]:
-    """Encrypt an existing plaintext SQLite database using SQLCipher.
-    
-    This creates a new encrypted database file and migrates all data.
-    The original database is backed up before migration.
-    
-    Args:
-        encryption_key: The encryption key to use for the new database
-        
-    Returns:
-        Dict with migration status and details
-    """
+    """Offline compatibility entry point for the preservation-verified migration."""
     if not SQLCIPHER_AVAILABLE:
-        return {"success": False, "error": "pysqlcipher3 not installed"}
-    
+        return {"success": False, "error": "sqlcipher3 not installed"}
     if not os.path.exists(DATABASE):
         return {"success": False, "error": "Source database does not exist"}
-    
-    # Backup original database
-    backup_path = f"{DATABASE}.backup.{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
-    import shutil
-    shutil.copy2(DATABASE, backup_path)
-    
     try:
-        # Create new encrypted database
-        encrypted_db = f"{DATABASE}.encrypted"
-        if os.path.exists(encrypted_db):
-            os.remove(encrypted_db)
-        
-        # Connect to plain database
-        plain_conn = sqlite3.connect(DATABASE)
-        plain_conn.row_factory = sqlite3.Row
-        
-        # Connect to encrypted database
-        enc_conn = sqlcipher.connect(encrypted_db)
-        enc_conn.execute(f"PRAGMA key = '{encryption_key}'")
-        enc_conn.execute(f"PRAGMA cipher = {SQLCIPHER_CIPHER}")
-        enc_conn.execute(f"PRAGMA kdf_iter = {SQLCIPHER_KDF_ITER}")
-        enc_conn.execute(f"PRAGMA page_size = {SQLCIPHER_PAGE_SIZE}")
-        enc_conn.execute(f"PRAGMA hmac_algorithm = {SQLCIPHER_HMAC}")
-        enc_conn.execute("PRAGMA cipher_page_size = 4096")
-        enc_conn.execute("PRAGMA cipher_kdf_algorithm = PBKDF2_HMAC_SHA512")
-        
-        # Get all tables from plain database
-        tables = plain_conn.execute(
-            "SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-        ).fetchall()
-        
-        for table_name, create_sql in tables:
-            if create_sql:
-                # Create table in encrypted database
-                enc_conn.execute(create_sql)
-                
-                # Copy data
-                rows = plain_conn.execute(f"SELECT * FROM {table_name}").fetchall()
-                if rows:
-                    columns = [desc[0] for desc in plain_conn.execute(f"SELECT * FROM {table_name} LIMIT 1").description]
-                    placeholders = ", ".join(["?"] * len(columns))
-                    enc_conn.executemany(
-                        f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders})",
-                        rows
-                    )
-        
-        # Copy indexes
-        indexes = plain_conn.execute(
-            "SELECT name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL"
-        ).fetchall()
-        
-        for index_name, index_sql in indexes:
-            if index_sql and not index_name.startswith("sqlite_"):
-                try:
-                    enc_conn.execute(index_sql)
-                except Exception:
-                    pass  # Some indexes may fail (e.g., unique constraints on existing data)
-        
-        # Copy triggers
-        triggers = plain_conn.execute(
-            "SELECT name, sql FROM sqlite_master WHERE type='trigger'"
-        ).fetchall()
-        
-        for trigger_name, trigger_sql in triggers:
-            if trigger_sql:
-                try:
-                    enc_conn.execute(trigger_sql)
-                except Exception:
-                    pass
-        
-        enc_conn.commit()
-        enc_conn.close()
-        plain_conn.close()
-        
-        # Replace original with encrypted
-        os.replace(encrypted_db, DATABASE)
-        
-        return {
-            "success": True,
-            "backup_path": backup_path,
-            "message": "Database encrypted successfully"
-        }
-        
-    except Exception as e:
-        # Restore from backup on failure
-        if os.path.exists(backup_path):
-            if os.path.exists(DATABASE):
-                os.remove(DATABASE)
-            os.replace(backup_path, DATABASE)
-        return {"success": False, "error": str(e), "backup_path": backup_path}
+        from pathlib import Path
+        from scripts.migrate_encryption import migrate_in_place
+        result = migrate_in_place(Path(DATABASE), encryption_key)
+        return {"success": bool(result["verified"]), "backup_path": result.get("rollback_copy"),
+                "message": "Database encryption preservation verified", **result}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
 
 
 def verify_encryption() -> dict[str, Any]:
@@ -1848,8 +1879,9 @@ def verify_encryption() -> dict[str, Any]:
         return {"encrypted": False, "reason": "No encryption key configured"}
     
     try:
-        conn = sqlcipher.connect(DATABASE)
-        conn.execute(f"PRAGMA key = '{encryption_key.decode('utf-8')}'")
+        from pathlib import Path
+        from services.encrypted_storage import _cipher_connection
+        conn = _cipher_connection(Path(DATABASE), encryption_key.decode('utf-8'))
         cursor = conn.cursor()
         cursor.execute("SELECT 1")
         cursor.fetchone()
@@ -1884,6 +1916,14 @@ def record_audit_event(
     if not action:
         raise ValueError("Audit action is required.")
     payload = json.dumps(details or {}, ensure_ascii=True, default=str)
+    if postgres_selected():
+        from services.db.factory import dao_session
+        with dao_session() as factory:
+            return factory.create_audit_dao().record_event(
+                int(user_id) if user_id is not None else None, action,
+                str(entity_type or "")[:80] or None, str(entity_id or "")[:120] or None,
+                json.loads(payload),
+            )
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -1907,6 +1947,10 @@ def record_audit_event(
 
 def get_audit_events(user_id, limit=100):
     limit = max(1, min(int(limit), 1000))
+    if postgres_selected():
+        from services.db.factory import dao_session
+        with dao_session() as factory:
+            return list(factory.create_audit_dao().get_events(int(user_id), limit))
     conn = get_connection()
     rows = conn.execute(
         """
@@ -1996,9 +2040,8 @@ def delete_user_data(user_id):
 # V6 RANGE FORECAST HISTORY
 # ==========================================================
 
-def save_range_forecast(user_id, symbol, forecast_payload):
-    """Persist one immutable canonical forecast snapshot and its provenance."""
-    create_tables()
+def range_forecast_values(user_id, symbol, forecast_payload):
+    """Canonical immutable ledger values shared by both repository backends."""
     payload = cast(dict[str, Any], forecast_payload or {})
     forecast = cast(dict[str, Any], payload.get("forecast", {}))
     training = cast(dict[str, Any], payload.get("training", {}))
@@ -2050,6 +2093,27 @@ def save_range_forecast(user_id, symbol, forecast_payload):
         "training": training,
     }
     snapshot_hash = _canonical_hash(snapshot)
+    return (
+        int(user_id), symbol, forecast.get("median"), model_version,
+        json.dumps(payload, ensure_ascii=True, default=str), forecast.get("low"),
+        forecast.get("median"), forecast.get("high"), forecast.get("confidence_level"),
+        training.get("training_window"), timeframe, origin_timestamp, origin_timestamp,
+        origin_timestamp, target_timestamp, provider, data_timestamp, feature_timestamp,
+        data_version, schema_version, json.dumps(evidence, ensure_ascii=True, default=str),
+        forecast_status, snapshot_hash,
+        "pending" if forecast_status in {"model_supported", "baseline_only", "low_evidence", "available"} else "excluded",
+        0, horizon_value, int(horizon_sessions),
+    )
+
+
+def save_range_forecast(user_id, symbol, forecast_payload):
+    """Persist one immutable canonical forecast snapshot and its provenance."""
+    if postgres_selected():
+        from services.db.factory import dao_session
+        with dao_session() as factory:
+            return factory.create_prediction_dao().save_range_forecast(user_id, symbol, forecast_payload)
+    create_tables()
+    values = range_forecast_values(user_id, symbol, forecast_payload)
     conn = get_connection()
     cursor = conn.execute(
         """INSERT INTO prediction_history(
@@ -2059,17 +2123,7 @@ def save_range_forecast(user_id, symbol, forecast_payload):
             feature_timestamp,data_version,schema_version,forecast_evidence_json,forecast_status,
             snapshot_hash,outcome_status,official_outcome,horizon,horizon_sessions
         ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (
-            int(user_id), symbol, forecast.get("median"), model_version,
-            json.dumps(payload, ensure_ascii=True, default=str), forecast.get("low"),
-            forecast.get("median"), forecast.get("high"), forecast.get("confidence_level"),
-            training.get("training_window"), timeframe, origin_timestamp, origin_timestamp,
-            origin_timestamp, target_timestamp, provider, data_timestamp, feature_timestamp,
-            data_version, schema_version, json.dumps(evidence, ensure_ascii=True, default=str),
-            forecast_status, snapshot_hash,
-            "pending" if forecast_status in {"model_supported", "baseline_only", "low_evidence", "available"} else "excluded",
-            0, horizon_value, int(horizon_sessions),
-        ),
+        values,
     )
     row_id = int(cursor.lastrowid)
     conn.commit(); conn.close()
@@ -2216,7 +2270,7 @@ def mark_range_forecast_unverifiable(prediction_id, *, reason, evidence=None):
 def get_pending_range_forecasts(limit=1000, user_id=None):
     """Return unsettled ledger rows for the automatic settlement worker."""
     conn = get_connection()
-    conn.row_factory = sqlite3.Row
+    conn.row_factory = database_row
     rows = conn.execute(
         """SELECT id,user_id,symbol,forecast_low,forecast_high,confidence_level,
                   training_window,timeframe,origin_timestamp,target_timestamp,snapshot_hash,
@@ -2235,6 +2289,10 @@ def get_pending_range_forecasts(limit=1000, user_id=None):
 
 def get_settled_range_forecasts(user_id, limit=500):
     """Return only authoritative automatic outcomes for official calibration."""
+    if postgres_selected():
+        from services.db.factory import dao_session
+        with dao_session() as factory:
+            return list(factory.create_prediction_dao().get_settled_forecasts(user_id, limit))
     conn = get_connection()
     rows = conn.execute(
         """SELECT id,symbol,forecast_low,forecast_median,forecast_high,confidence_level,

@@ -14,6 +14,8 @@ const destinations = [
   ["/alerts", "Alerts", "Price and corridor alerts"], ["/risk", "Risk Lab", "Portfolio stress tests"],
   ["/track-record", "Track Record", "Settled calibration evidence"], ["/system", "System", "Provider health"],
   ["/account", "Account", "Sessions and identity"],
+  ["/portfolio", "Portfolio", "Holdings and transactions"],
+  ["/operations", "Operations", "Least-privilege support and model controls"],
 ] as const;
 
 export function SymbolSearch() {
@@ -23,10 +25,25 @@ export function SymbolSearch() {
   const router = useRouter();
   const input = useRef<HTMLInputElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  const dialog = useRef<HTMLElement>(null);
   const { setSelectedSymbol } = useMarket();
   const { isAdmin } = useAuth();
   const routes = isAdmin ? [...destinations, ["/admin", "Admin", "Models and operations"] as const] : destinations;
-  const routeMatches = routes.filter(([, label, detail]) => `${label} ${detail}`.toLowerCase().includes(q.toLowerCase())).slice(0, 5);
+  const routeMatches = routes.filter(([, label, detail]) => `${label} ${detail}`.toLowerCase().includes(q.toLowerCase()));
+
+  useEffect(() => {
+    if (!open) return;
+    input.current?.focus();
+    const trap = (event: KeyboardEvent) => {
+      if (event.key !== "Tab" || !dialog.current) return;
+      const controls = [...dialog.current.querySelectorAll<HTMLElement>("input,button,a[href]")];
+      const first = controls[0], last = controls.at(-1);
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+    window.addEventListener("keydown", trap);
+    return () => window.removeEventListener("keydown", trap);
+  }, [open]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -50,8 +67,8 @@ export function SymbolSearch() {
   const goSymbol = (symbol: string) => { setSelectedSymbol(symbol); navigate(`/markets/${encodeURIComponent(symbol)}`); };
   return <>
     <button ref={trigger} type="button" onClick={() => setOpen(true)} aria-label="Open search and command palette" aria-haspopup="dialog" aria-expanded={open} className="flex size-11 min-w-0 items-center justify-center gap-2 rounded-md border border-slate-800 bg-terminal-950 px-2 text-left text-sm text-slate-500 hover:border-slate-700 sm:w-auto sm:min-w-64 sm:justify-start sm:px-3"><Search aria-hidden="true" size={16}/><span className="hidden flex-1 sm:inline">Search or jump anywhere</span><kbd className="hidden rounded border border-slate-700 px-1.5 py-.5 text-[10px] sm:inline">Ctrl K</kbd></button>
-    {open && <div role="presentation" className="fixed inset-0 z-[80] bg-black/75 p-3 backdrop-blur-sm" onMouseDown={() => { setOpen(false); trigger.current?.focus(); }}><section role="dialog" aria-modal="true" aria-label="Search and command palette" onMouseDown={(event) => event.stopPropagation()} className="mx-auto mt-[9vh] w-[min(680px,100%)] overflow-hidden rounded-2xl border border-slate-700 bg-terminal-900 shadow-2xl">
-      <div className="flex items-center gap-3 border-b border-slate-800 p-4"><Search aria-hidden="true" size={18} className="text-accent"/><label className="w-full"><span className="sr-only">Symbol, company, or destination</span><input ref={input} autoFocus value={q} onChange={(event) => setQ(event.target.value)} placeholder="Symbol, page, or action..." className="h-11 w-full bg-transparent text-base outline-none placeholder:text-slate-600"/></label><kbd className="rounded border border-slate-700 px-2 py-1 text-[10px] text-slate-500">Esc</kbd></div>
+    {open && <div role="presentation" className="fixed inset-0 z-[80] bg-black/75 p-3 backdrop-blur-sm" onMouseDown={() => { setOpen(false); trigger.current?.focus(); }}><section ref={dialog} role="dialog" aria-modal="true" aria-label="Search and command palette" onMouseDown={(event) => event.stopPropagation()} className="mx-auto mt-[9vh] w-[min(680px,100%)] overflow-hidden rounded-2xl border border-slate-700 bg-terminal-900 shadow-2xl">
+      <div className="flex items-center gap-3 border-b border-slate-800 p-4"><Search aria-hidden="true" size={18} className="text-accent"/><label className="w-full"><span className="sr-only">Symbol, company, or destination</span><input ref={input} type="search" autoFocus value={q} onChange={(event) => setQ(event.target.value)} placeholder="Symbol, page, or action..." className="h-11 w-full bg-transparent text-base outline-none placeholder:text-slate-600"/></label><button type="button" aria-label="Close command palette" onClick={() => { setOpen(false); trigger.current?.focus(); }} className="min-h-11 min-w-11 rounded border border-slate-700 px-2 py-1 text-xs text-slate-400">Esc</button></div>
       <div className="max-h-[62vh] overflow-auto p-2">
         {routeMatches.length > 0 && <div><div className="px-3 pb-1 pt-2 text-[9px] font-semibold uppercase tracking-[.18em] text-slate-600">Destinations</div>{routeMatches.map(([href, label, detail]) => <button key={href} onClick={() => navigate(href)} className="flex min-h-12 w-full items-center justify-between rounded-lg px-3 text-left hover:bg-slate-800/60"><span><b className="text-sm text-slate-100">{label}</b><small className="ml-3 text-slate-500">{detail}</small></span><ArrowRight aria-hidden="true" size={14} className="text-slate-600"/></button>)}</div>}
         {items.length > 0 && <div><div className="px-3 pb-1 pt-3 text-[9px] font-semibold uppercase tracking-[.18em] text-slate-600">NSE / BSE instruments</div>{items.map((item) => <button key={`${item.exchange}-${item.symbol}-${item.instrument_type}`} onClick={() => goSymbol(item.symbol)} className="flex min-h-12 w-full min-w-0 items-center justify-between gap-2 rounded-lg px-3 text-left hover:bg-slate-800/60"><span className="min-w-0"><b className="tabular text-slate-100">{item.symbol}</b><small className="ml-3 hidden text-slate-500 sm:inline">{item.name}</small></span><span className="shrink-0 rounded bg-slate-800 px-2 py-1 text-[10px] text-slate-400">{item.exchange} · {item.instrument_type}</span></button>)}</div>}

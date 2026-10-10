@@ -7,6 +7,7 @@ import { Stat } from "@/components/Stat";
 import { TerminalShell } from "@/components/TerminalShell";
 import { VirtualOrderTable, type PaperOrderRow } from "@/components/VirtualOrderTable";
 import { HistoricalReplay } from "@/components/HistoricalReplay";
+import { TimeframeBar } from "@/components/TimeframeBar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -23,11 +24,11 @@ type Account = { initial_balance: number; cash_balance: number; market_value: nu
 type Journal = { id: number; order_id?: number; event_type: string; notes?: string; created_at: string };
 type Challenge = { key: string; title: string; scenario: string; choices: string[] };
 
-type OrderResult = { status: string; fill_price: number; simulation_notice: string; margin_required?: number; context?: MarketDataContext };
+type OrderResult = { order_id: number; status: string; fill_price: number; simulation_notice: string; margin_required?: number; context?: MarketDataContext };
 
 export default function PaperTrading() {
   const queryClient = useQueryClient();
-  const { selectedSymbol, setSelectedSymbol, timeframe, dispatchSurface } = useMarket();
+  const { selectedSymbol, setSelectedSymbol, timeframe, setTimeframe, dispatchSurface } = useMarket();
   const [orderType, setOrderType] = useState("MARKET");
   const [instrumentType, setInstrumentType] = useState("EQUITY");
   const [message, setMessage] = useState("");
@@ -40,9 +41,11 @@ export default function PaperTrading() {
   const challenges = useQuery({ queryKey: ["paper-challenges"], queryFn: () => api<{ items: Challenge[] }>("/api/v1/paper/challenges"), enabled: sessionReady });
   const order = useMutation({
     mutationFn: (body: unknown) => api<OrderResult>("/api/v1/paper/orders", { method: "POST", body: JSON.stringify(body) }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["paper"] });
-      queryClient.invalidateQueries({ queryKey: ["paper-journal"] });
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["paper"] }),
+        queryClient.invalidateQueries({ queryKey: ["paper-journal"] }),
+      ]);
     },
   });
 
@@ -68,19 +71,21 @@ export default function PaperTrading() {
   }
 
   async function confirmOrder() {
-    if (!pendingOrder) return;
+    if (!pendingOrder || order.isPending) return;
+    const submittedOrder = pendingOrder;
     setError(""); setMessage("");
     try {
-      const result = await order.mutateAsync(pendingOrder);
-      if (!result.context || result.context.requested_symbol.toUpperCase() !== selectedSymbol.toUpperCase() || result.context.timeframe !== timeframe) {
-        dispatchSurface({ type: "error", surface: "paper_order", error: "Paper-order market context did not match the selected symbol and timeframe." });
-        setError("Order recorded, but its market context did not match the selected terminal context. Review it before relying on the fill.");
+      const result = await order.mutateAsync(submittedOrder);
+      setPendingOrder(null);
+      setMessage(`Order #${result.order_id} recorded: ${result.status}${result.fill_price ? ` @ ${inr(result.fill_price)}` : ""}${result.margin_required ? ` · margin ${inr(result.margin_required)}` : ""} — ${result.simulation_notice}`);
+      if (!result.context || typeof result.context.requested_symbol !== "string" || result.context.requested_symbol.toUpperCase() !== String(submittedOrder.symbol).toUpperCase() || result.context.timeframe !== submittedOrder.timeframe) {
+        dispatchSurface({ type: "error", surface: "paper_order", error: "Recorded paper-order market context did not match the reviewed order." });
+        setError("This order was recorded. Its market context differs from the reviewed order; check the updated order history before relying on the fill. Do not submit it again.");
         return;
       }
       dispatchSurface({ type: "context", surface: "paper_order", context: result.context });
-      setMessage(`${result.status}${result.fill_price ? ` @ ${inr(result.fill_price)}` : ""}${result.margin_required ? ` · margin ${inr(result.margin_required)}` : ""} — ${result.simulation_notice}`);
-      setPendingOrder(null);
     } catch (reason) { setError((reason as Error).message); }
+    finally { setPendingOrder(null); }
   }
 
   const data = account.data;
@@ -97,6 +102,7 @@ export default function PaperTrading() {
               <form onSubmit={submit} className="space-y-3">
                 <div className="grid grid-cols-2 gap-2"><Input name="symbol" value={selectedSymbol} onChange={(event) => setSelectedSymbol(event.target.value.toUpperCase())} aria-label="Shared market symbol" required /><Select name="side" defaultValue="" aria-label="Paper order side" required><option value="" disabled>Choose side</option><option>BUY</option><option>SELL</option></Select></div>
                 <p className="text-[10px] uppercase tracking-wide text-slate-500">Shared context: {selectedSymbol} · {timeframe}</p>
+                <TimeframeBar value={timeframe} onChange={setTimeframe} />
                 <div className="grid grid-cols-2 gap-2"><Select value={instrumentType} onChange={(event) => setInstrumentType(event.target.value)}><option>EQUITY</option><option>FUTURE</option><option>OPTION</option></Select><Select value={orderType} onChange={(event) => setOrderType(event.target.value)}><option>MARKET</option><option>LIMIT</option><option>STOP</option><option>TRAILING_STOP</option><option>BRACKET</option></Select></div>
                 <div className="grid grid-cols-2 gap-2"><Input name="quantity" type="number" step="any" min="0.0001" placeholder={instrumentType === "EQUITY" ? "Quantity" : "Lots"} required /><Input name="lot_size" type="number" step="1" min="1" defaultValue={1} placeholder="Lot size" title="For F&O use the current exchange lot size." /></div>
                 {instrumentType !== "EQUITY" && <Input name="expiry" type="date" required />}
@@ -109,7 +115,7 @@ export default function PaperTrading() {
                 <Input name="notes" aria-label="Required paper trade thesis" placeholder="Required thesis / journal note" required minLength={5} />
                 <Button className="w-full" disabled={order.isPending}>Review paper order</Button>
                 {pendingOrder && <div className="rounded-xl border border-warning/30 bg-warning/5 p-3" role="dialog" aria-label="Paper order decision pause"><div className="text-xs font-semibold text-warning">Decision pause</div><dl className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-slate-400"><div><dt>Action</dt><dd className="text-slate-200">{String(pendingOrder.side)} {String(pendingOrder.symbol)}</dd></div><div><dt>Exposure units</dt><dd className="text-slate-200">{Number(pendingOrder.quantity) * Number(pendingOrder.lot_size)}</dd></div><div><dt>Friction</dt><dd className="text-slate-200">{String(pendingOrder.spread_bps)} bps spread + {String(pendingOrder.slippage_bps)} bps slippage</dd></div><div><dt>Forecast evidence</dt><dd className="text-slate-200">Not linked; no range selected this order</dd></div></dl><p className="mt-2 text-[11px] text-slate-500">Thesis: {String(pendingOrder.reasoning_notes)}</p><div className="mt-3 flex gap-2"><Button type="button" onClick={confirmOrder} disabled={order.isPending}>{order.isPending ? "Simulating…" : "Confirm simulation"}</Button><Button type="button" variant="ghost" onClick={() => setPendingOrder(null)} disabled={order.isPending}>Go back</Button></div></div>}
-                {message && <p className="text-xs leading-5 text-gain">{message}</p>}{error && <p className="text-xs leading-5 text-loss">{error}</p>}
+                {message && <p role="status" className="text-xs leading-5 text-gain">{message}</p>}{error && <p role="alert" className="text-xs leading-5 text-loss">{error}</p>}
               </form>
             </CardContent>
           </Card>

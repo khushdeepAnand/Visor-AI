@@ -32,6 +32,7 @@ const secondary = [
   ["/track-record", "Track Record", ChartNoAxesCombined, "Automatically settled forecast evidence"],
   ["/system", "System", Gauge, "Provider and service health"],
   ["/account", "Account", CircleUserRound, "Profile and preferences"],
+  ["/operations", "Operations", ShieldCheck, "Least-privilege model and support tools"],
 ] as const;
 
 export function TerminalShell({ children }: { children: React.ReactNode }) {

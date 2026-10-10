@@ -31,6 +31,11 @@ from forecasting.v14_integration import cqr_canary_status
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def audit_signing_key(monkeypatch):
+    monkeypatch.setenv("STOCKPILOT_AUDIT_SECRET", "promotion-test-signing-material-only-32-bytes")
+
+
 @pytest.fixture()
 def manifest(tmp_path, monkeypatch):
     path = tmp_path / "promotion_manifest.json"
@@ -229,7 +234,7 @@ def test_cli_blocks_bad_candidate_and_promotes_good_one(tmp_path):
     check_before = _cli(["check"], manifest)
     assert check_before.returncode == 1
 
-    eval_path.write_text(json.dumps({"T3": {"coverage": 0.80, "mase": 0.5, "winkler_score": 10.0, "baseline_winkler": 12.0, "diebold_mariano": {"reject_null": True, "p_value": 0.01}, "n_forecasts": 200}}), encoding="utf-8")
+    eval_path.write_text(json.dumps({"T3": {"coverage": 0.80, "mase": 0.5, "winkler_score": 10.0, "baseline_winkler": 12.0, "diebold_mariano": {"reject_null": True, "p_value": 0.01, "dm_statistic": -3.0}, "n_forecasts": 200}}), encoding="utf-8")
     promoted = _cli(["promote", "--eval-json", str(eval_path), "--candidate", "good", "--artifact-hash", "h2"], manifest)
     assert promoted.returncode == 0, promoted.stdout + promoted.stderr
     assert manifest.exists()

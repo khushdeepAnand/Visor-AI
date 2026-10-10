@@ -69,12 +69,13 @@ def test_pit_values():
 def test_pit_uniformity_test():
     """Test PIT uniformity (KS test)."""
     # Uniform PIT values should pass
-    pit_uniform = np.random.uniform(0, 1, 1000)
+    rng = np.random.default_rng(20261010)
+    pit_uniform = rng.uniform(0, 1, 1000)
     stat, p = pit_uniformity_test(pit_uniform)
     assert p > 0.01  # Should not reject uniformity
 
     # Non-uniform should fail
-    pit_skewed = np.random.beta(2, 5, 1000)
+    pit_skewed = rng.beta(2, 5, 1000)
     stat, p = pit_uniformity_test(pit_skewed)
     assert p < 0.05  # Should reject uniformity
 

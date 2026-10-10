@@ -20,8 +20,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import threading
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -33,14 +35,16 @@ from forecasting.promotion_gate import (
     promotion_gate_summary,
     run_all_tier_gates,
 )
+from forecasting.promotion_store import append_decision, history, is_current, signing_key
+from database import DATABASE_ERRORS
 
 LOGGER = logging.getLogger(__name__)
 
 #: Bump whenever the gate semantics or the receipt schema changes.
-GATE_VERSION = "stockpilot-promotion-gate-v1"
+GATE_VERSION = "stockpilot-promotion-gate-v2"
 
 #: Schema version of the persisted production manifest.
-MANIFEST_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 2
 
 #: A manifest older than this is stale and must not enable anything.
 #: Override with STOCKPILOT_PROMOTION_RECEIPT_MAX_AGE_DAYS.
@@ -146,18 +150,52 @@ def decide_promotion(
     if not tier_results:
         raise ValueError("decide_promotion requires at least one tier evaluation result")
 
+    signing_key()
+    cfg = config or PromotionGateConfig()
+    floor = PromotionGateConfig()
+    policy_values = (cfg.min_forecasts_per_tier, cfg.min_forecasts_overall, cfg.max_mase,
+                      cfg.coverage_tolerance, cfg.dm_significance, cfg.conditional_coverage_tolerance,
+                      cfg.target_coverage, cfg.min_mase_improvement, cfg.min_winkler_improvement,
+                      cfg.winkler_significance)
+    if (not all(math.isfinite(value) for value in policy_values)
+            or cfg.target_coverage != floor.target_coverage or target_coverage != cfg.target_coverage
+            or not 0 <= cfg.coverage_tolerance <= floor.coverage_tolerance
+            or not 0 < cfg.dm_significance <= floor.dm_significance
+            or not 0 < cfg.winkler_significance <= floor.winkler_significance
+            or not 0 <= cfg.conditional_coverage_tolerance <= floor.conditional_coverage_tolerance
+            or not 0 <= cfg.min_mase_improvement < 1
+            or not 0 <= cfg.min_winkler_improvement < 1
+            or not 0 <= cfg.max_mase <= floor.max_mase
+            or (cfg.max_pinball_loss is not None and
+                (not math.isfinite(cfg.max_pinball_loss) or cfg.max_pinball_loss < 0))
+            or cfg.min_forecasts_per_tier < floor.min_forecasts_per_tier
+            or cfg.min_forecasts_overall < floor.min_forecasts_overall
+            or cfg.max_mase > floor.max_mase
+            or cfg.coverage_tolerance > floor.coverage_tolerance
+            or cfg.dm_significance > floor.dm_significance
+            or cfg.conditional_coverage_tolerance > floor.conditional_coverage_tolerance):
+        raise ValueError("Production promotion policy cannot weaken the mandatory gate")
+    rollout = canary_pct if canary_pct is not None else DEFAULT_CANARY_PCT
+    if not math.isfinite(rollout) or not 0 <= rollout <= 1:
+        raise ValueError("Canary percentage must be a finite fraction from zero to one")
+
     evaluated_at = now or datetime.now(timezone.utc)
-    gate_results = run_all_tier_gates(dict(tier_results), config)
+    gate_results = run_all_tier_gates(dict(tier_results), cfg)
     summary = promotion_gate_summary(gate_results)
     passed = bool(summary["overall_passed"])
     failed_tiers = tuple(sorted(t for t, r in gate_results.items() if not r.passed))
 
-    counts = [max(int(getattr(r, "n_forecasts", 0) or 0), 0) for r in tier_results.values()]
+    counts = [max(int(getattr(r, "n_forecasts", 0) or 0), 0) for t, r in tier_results.items() if t != "overall"]
     n_forecasts = int(sum(counts))
-    coverages = [float(getattr(r, "coverage", 0.0) or 0.0) for r in tier_results.values()]
+    coverages = [float(getattr(r, "coverage", 0.0) or 0.0) for t, r in tier_results.items() if t != "overall"]
     weights = counts or [0] * len(coverages)
     total_weight = float(sum(weights))
     coverage = float(sum(c * w for c, w in zip(coverages, weights)) / total_weight) if total_weight > 0 else 0.0
+    if n_forecasts < cfg.min_forecasts_overall:
+        passed = False
+        summary["overall_passed"] = False
+        summary["aggregate_minimum_passed"] = False
+        failed_tiers = (*failed_tiers, "aggregate_minimum")
 
     receipt = build_receipt(
         gate_results,
@@ -169,9 +207,19 @@ def decide_promotion(
         target_coverage=target_coverage,
         canary_pct=canary_pct,
     )
+    receipt["passed"] = passed
+    receipt["tier_validation"] = {
+        tier: {"coverage": float(getattr(result, "coverage", 0)),
+               "target_coverage": cfg.target_coverage,
+               "n_forecasts": int(getattr(result, "n_forecasts", 0))}
+        for tier, result in tier_results.items() if tier != "overall"
+    }
 
     target = manifest or manifest_path()
+    payload = {"schema_version": MANIFEST_SCHEMA_VERSION, "receipt": receipt,
+               "gate_summary": summary, "promoted_at": evaluated_at.isoformat()}
     if not passed:
+        append_decision(target, "reject", payload, actor="promotion-gate", reason="Promotion gate failed")
         failed_reason = ", ".join(failed_tiers) or "gate failed"
         LOGGER.error(
             "Promotion blocked for candidate %s: failed tiers %s",
@@ -196,7 +244,8 @@ def decide_promotion(
         "gate_summary": summary,
         "promoted_at": evaluated_at.isoformat(),
     }
-    _atomic_write(target, payload)
+    payload = append_decision(target, "promote", payload, actor="promotion-gate", reason="All mandatory tier gates passed",
+                              export=lambda signed: _atomic_write(target, signed))
     LOGGER.info(
         "Promoted candidate %s to production manifest %s (tiers passed %s/%s)",
         candidate_id,
@@ -219,7 +268,7 @@ def decide_promotion(
 
 def _atomic_write(target: Path, payload: Mapping[str, Any]) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp = target.with_suffix(target.suffix + f".{uuid.uuid4().hex}.tmp")
     with _write_lock:
         tmp.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str), encoding="utf-8")
         os.replace(tmp, target)
@@ -235,8 +284,14 @@ def load_manifest(manifest: Path | None = None) -> dict[str, Any] | None:
     except (OSError, ValueError) as exc:
         LOGGER.error("Promotion manifest unreadable at %s (%s: %s)", target, type(exc).__name__, exc)
         return None
-    if not isinstance(raw, dict) or int(raw.get("schema_version", 0) or 0) != MANIFEST_SCHEMA_VERSION:
+    if not isinstance(raw, dict) or raw.get("schema_version") != MANIFEST_SCHEMA_VERSION:
         LOGGER.error("Promotion manifest at %s has an unsupported schema", target)
+        return None
+    try:
+        if not is_current(target, raw):
+            return None
+    except (*DATABASE_ERRORS, OSError, RuntimeError, ValueError, TypeError):
+        LOGGER.error("Promotion signature or audit integrity could not be verified")
         return None
     return raw
 
@@ -277,6 +332,9 @@ def active_promotion_receipt(manifest: Path | None = None) -> dict[str, Any] | N
     if evaluated_at.tzinfo is None:
         evaluated_at = evaluated_at.replace(tzinfo=timezone.utc)
     age = datetime.now(timezone.utc) - evaluated_at
+    if age < timedelta(0):
+        LOGGER.error("Promotion receipt is future-dated; refusing activation")
+        return None
     if age > timedelta(days=MAX_RECEIPT_AGE_DAYS):
         LOGGER.error(
             "Promotion receipt is stale (%.1f days > %d day limit); CQR disabled until re-promoted",
@@ -326,9 +384,55 @@ def _inactive_reason(raw: dict[str, Any] | None) -> str:
         return "evaluated_at_unparseable"
     if evaluated_at.tzinfo is None:
         evaluated_at = evaluated_at.replace(tzinfo=timezone.utc)
+    if evaluated_at > datetime.now(timezone.utc):
+        return "receipt_future_dated"
     if datetime.now(timezone.utc) - evaluated_at > timedelta(days=MAX_RECEIPT_AGE_DAYS):
         return "receipt_stale"
     return "unknown"
+
+
+def promotion_history(manifest: Path | None = None) -> list[dict[str, Any]]:
+    """Return verified append-only history; integrity errors fail closed."""
+    return history(manifest or manifest_path())
+
+
+def rollback_promotion(candidate_id: str, *, reason: str, actor: str, manifest: Path | None = None) -> dict[str, Any]:
+    """Reactivate a prior gated version without renewing its evidence timestamp."""
+    if len(reason.strip()) < 12 or not actor.strip():
+        raise ValueError("Rollback requires an actor and a justification of at least 12 characters")
+    target = manifest or manifest_path()
+    events = promotion_history(target)
+    candidates = [event["manifest"] for event in events
+                  if event["action"] == "promote" and event["manifest"]["receipt"]["candidate_id"] == candidate_id]
+    if not candidates:
+        raise ValueError("No previously gated candidate with this ID")
+    selected = candidates[-1]
+    if any(event["action"] == "revoke" and
+           event["manifest"]["receipt"].get("artifact_hash") == selected["receipt"].get("artifact_hash")
+           for event in events):
+        raise ValueError("Prior artifact was revoked; re-evaluation required")
+    receipt = selected["receipt"]
+    evaluated = datetime.fromisoformat(receipt["evaluated_at"])
+    age = datetime.now(timezone.utc) - evaluated
+    if (receipt.get("passed") is not True or receipt.get("gate_version") != GATE_VERSION
+            or not receipt.get("artifact_hash") or not timedelta(0) <= age <= timedelta(days=MAX_RECEIPT_AGE_DAYS)):
+        raise ValueError("Prior candidate has invalid or expired gate evidence; re-evaluation required")
+    selected = append_decision(target, "rollback", selected, actor=actor, reason=reason,
+                               export=lambda signed: _atomic_write(target, signed))
+    return dict(receipt)
+
+
+def revoke_promotion(*, reason: str, actor: str, manifest: Path | None = None) -> None:
+    if len(reason.strip()) < 12 or not actor.strip():
+        raise ValueError("Revocation requires an actor and a justification of at least 12 characters")
+    target = manifest or manifest_path()
+    previous = load_manifest(target)
+    if previous is None:
+        if target.exists():
+            raise RuntimeError("Cannot revoke an unverified manifest; inspect audit integrity")
+        return
+    append_decision(target, "revoke", previous, actor=actor, reason=reason,
+                    export=lambda signed: target.unlink(missing_ok=True))
 
 
 __all__: Sequence[str] = (
@@ -343,4 +447,7 @@ __all__: Sequence[str] = (
     "load_manifest",
     "active_promotion_receipt",
     "manifest_status",
+    "promotion_history",
+    "rollback_promotion",
+    "revoke_promotion",
 )

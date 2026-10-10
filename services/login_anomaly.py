@@ -21,17 +21,31 @@ the session so the UI can show a "new sign-in" notice.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import math
 import os
 import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from database import get_connection
+from services.db.configuration import postgres_selected
+from services.db.factory import dao_session
 
 DEFAULT_MAX_TRAVEL_KMH = float(os.getenv("STOCKPILOT_MAX_TRAVEL_KMH", "900"))
 NEW_DEVICE_WINDOW_DAYS = int(os.getenv("STOCKPILOT_NEW_DEVICE_WINDOW_DAYS", "90"))
+DEVICE_COOKIE = "stockpilot_device"
+
+
+def device_token(request: Any) -> str:
+    value = str(request.cookies.get(DEVICE_COOKIE, ""))
+    return value if re.fullmatch(r"[0-9a-f]{64}", value) else secrets.token_hex(32)
+
+
+def token_device_hash(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
 
 # Cities used for coarse geolocation via configured resolver lookups
 # (kept minimal; pluggable through STOCKPILOT_GEO_RESOLVER=module:function).
@@ -39,6 +53,11 @@ _GEO_CACHE: dict[str, tuple[float, float]] = {}
 
 
 def _ensure_tables() -> None:
+    if postgres_selected():
+        with dao_session() as factory:
+            factory.db.fetchall("SELECT confirmed_at FROM login_devices LIMIT 0")
+            factory.db.fetchall("SELECT acknowledged_at FROM login_anomalies LIMIT 0")
+        return
     conn = get_connection()
     try:
         conn.execute(
@@ -80,6 +99,9 @@ def _ensure_tables() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_login_anomalies_user ON login_anomalies(user_id, created_at)"
         )
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(login_devices)")}
+        if "confirmed_at" not in columns:
+            conn.execute("ALTER TABLE login_devices ADD COLUMN confirmed_at TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -100,14 +122,11 @@ def ip_prefix(ip: str | None) -> str:
     """Coarse network prefix: /24 for IPv4, /48 for IPv6 (privacy + matching)."""
     if not ip:
         return "unknown"
-    ip = ip.strip()
-    if ":" in ip:  # IPv6
-        parts = ip.split(":")
-        return ":".join(parts[:3]) + "::/48"
-    parts = ip.split(".")
-    if len(parts) == 4:
-        return f"{parts[0]}.{parts[1]}.{parts[2]}.0/24"
-    return "unknown"
+    try:
+        address = ipaddress.ip_address(ip.strip())
+        return str(ipaddress.ip_network(f"{address}/{24 if address.version == 4 else 48}", strict=False))
+    except ValueError:
+        return "unknown"
 
 
 # ---------------------------------------------------------------------
@@ -161,6 +180,7 @@ def record_login(
     user_agent: str = "",
     ip: str | None = None,
     at: datetime | None = None,
+    device_hash: str | None = None,
 ) -> dict[str, Any]:
     """Record a successful login and return detected anomalies.
 
@@ -168,8 +188,10 @@ def record_login(
     Never raises -- anomaly detection must not block authentication.
     """
     try:
-        return _record_login_inner(user_id, user_agent, ip, at)
+        return _record_login_inner(user_id, user_agent, ip, at, device_hash)
     except Exception:
+        if strict_mode():
+            raise
         # Detection is best-effort; never block the login path.
         return {"new_device": False, "impossible_travel": False, "anomalies": []}
 
@@ -179,56 +201,66 @@ def _record_login_inner(
     user_agent: str,
     ip: str | None,
     at: datetime | None,
+    supplied_device_hash: str | None = None,
 ) -> dict[str, Any]:
     _ensure_tables()
     at = at or datetime.now(timezone.utc)
-    device_hash = hash_device(user_agent, ip)
+    device_hash = supplied_device_hash or hash_device(user_agent, ip)
     prefix = ip_prefix(ip)
     coords = geolocate(prefix)
 
-    conn = get_connection()
-    try:
-        existing = conn.execute(
-            "SELECT id, lat, lon, last_seen FROM login_devices WHERE user_id=? AND device_hash=?",
+    with dao_session() as factory:
+        conn = factory.db
+        conn.begin_write("security:" + str(int(user_id)))
+        existing = conn.fetchone(conn.sql(
+            "SELECT id, lat, lon, last_seen FROM login_devices WHERE user_id=? AND device_hash=?"),
             (int(user_id), device_hash),
-        ).fetchone()
+        )
 
-        new_device = existing is None
+        last_seen = _parse_time(existing["last_seen"]) if existing else None
+        new_device = existing is None or last_seen is None or at - last_seen > timedelta(days=NEW_DEVICE_WINDOW_DAYS)
         impossible_travel = False
         travel_detail = None
         previous_coords = None
         prev_time = None
+        # Fingerprints include the network prefix. Comparing only that fingerprint
+        # made travel detection blind to the very network changes it must detect.
+        previous = conn.fetchone(conn.sql(
+            "SELECT lat, lon, last_seen FROM login_devices WHERE user_id=? ORDER BY last_seen DESC LIMIT 1"),
+            (int(user_id),),
+        )
+        if previous:
+            if previous["lat"] is not None and previous["lon"] is not None:
+                previous_coords = (float(previous["lat"]), float(previous["lon"]))
+            prev_time = _parse_time(previous["last_seen"])
 
         if existing is None:
-            conn.execute(
+            conn.execute(conn.sql(
                 """INSERT INTO login_devices
                    (user_id, device_hash, device_label, ip_prefix, lat, lon,
                     first_seen, last_seen, seen_count)
-                   VALUES (?,?,?,?,?,?,?, ?, 1)""",
+                    VALUES (?,?,?,?,?,?,?, ?, 1)"""),
                 (int(user_id), device_hash, (user_agent or "")[:200],
                  prefix, coords[0] if coords else None,
                  coords[1] if coords else None,
                  at.isoformat(), at.isoformat()),
             )
         else:
-            if existing[1] is not None and existing[2] is not None:
-                previous_coords = (float(existing[1]), float(existing[2]))
-            prev_time = _parse_time(existing[3])
-            conn.execute(
+            conn.execute(conn.sql(
                 "UPDATE login_devices SET last_seen=?, seen_count=seen_count+1, "
-                "ip_prefix=?, lat=?, lon=? WHERE id=?",
+                "ip_prefix=?, lat=?, lon=? WHERE id=? AND user_id=?"),
                 (at.isoformat(), prefix,
                  coords[0] if coords else None, coords[1] if coords else None,
-                 int(existing[0])),
+                  int(existing["id"]), int(user_id)),
             )
 
         # Impossible travel: only when both coordinates are known and the
         # implied speed exceeds the configured threshold.
         if (
-            not new_device
-            and previous_coords is not None
+            previous_coords is not None
             and coords is not None
             and prev_time is not None
+            and at >= prev_time
         ):
             distance = haversine_km(previous_coords, coords)
             hours = max((at - prev_time).total_seconds() / 3600.0, 1e-6)
@@ -254,22 +286,17 @@ def _record_login_inner(
             })
 
         for anomaly in anomalies:
-            conn.execute(
+            conn.execute(conn.sql(
                 """INSERT INTO login_anomalies
                    (user_id, anomaly_type, severity, detail, ip_prefix, created_at)
-                   VALUES (?,?,?,?,?,?)""",
+                    VALUES (?,?,?,?,?,?)"""),
                 (int(user_id), anomaly["type"], anomaly["severity"],
                  anomaly["detail"], prefix, at.isoformat()),
             )
         conn.commit()
-    except Exception:
-        # Detection is best-effort; never block the login path.
-        conn.rollback()
-        return {"new_device": False, "impossible_travel": False, "anomalies": []}
-    finally:
-        conn.close()
 
     return {
+        "device_hash": device_hash,
         "new_device": new_device,
         "impossible_travel": impossible_travel,
         "anomalies": anomalies,
@@ -292,36 +319,54 @@ def strict_mode() -> bool:
     return os.getenv("STOCKPILOT_LOGIN_ANOMALY_STRICT", "").strip().lower() in ("1", "true", "yes")
 
 
+def confirm_device(user_id: int, device_hash: str) -> None:
+    """Called only after independent MFA proof; acknowledging an alert cannot trust a device."""
+    _ensure_tables()
+    with dao_session() as factory:
+        conn = factory.db
+        conn.begin_write("security:" + str(int(user_id)))
+        cursor = conn.execute(conn.sql("UPDATE login_devices SET confirmed_at=? WHERE user_id=? AND device_hash=?"),
+                              (datetime.now(timezone.utc).isoformat(), user_id, device_hash))
+        if cursor.rowcount != 1:
+            raise ValueError("Pending login device is unavailable; sign in again")
+        conn.commit()
+
+
+def device_confirmed(user_id: int, device_hash: str) -> bool:
+    _ensure_tables()
+    with dao_session() as factory:
+        conn = factory.db
+        row = conn.fetchone(conn.sql("SELECT confirmed_at FROM login_devices WHERE user_id=? AND device_hash=?"), (user_id, device_hash))
+        confirmed = _parse_time(row["confirmed_at"]) if row else None
+        return confirmed is not None and timedelta(0) <= datetime.now(timezone.utc) - confirmed <= timedelta(days=NEW_DEVICE_WINDOW_DAYS)
+
+
 def anomalies_for_user(user_id: int, limit: int = 50) -> list[dict[str, Any]]:
     """Recent anomalies for a user (for the security-center UI)."""
     _ensure_tables()
-    conn = get_connection()
-    try:
-        rows = conn.execute(
+    with dao_session() as factory:
+        conn = factory.db
+        rows = conn.fetchall(conn.sql(
             """SELECT id, anomaly_type, severity, detail, created_at, acknowledged_at
                FROM login_anomalies WHERE user_id=?
-               ORDER BY created_at DESC LIMIT ?""",
+                ORDER BY created_at DESC LIMIT ?"""),
             (int(user_id), max(1, min(int(limit), 500))),
-        ).fetchall()
+        )
         return [
             {
-                "id": r[0], "type": r[1], "severity": r[2],
-                "detail": r[3], "created_at": r[4], "acknowledged_at": r[5],
+                "id": r["id"], "type": r["anomaly_type"], "severity": r["severity"],
+                "detail": r["detail"], "created_at": r["created_at"], "acknowledged_at": r["acknowledged_at"],
             }
             for r in rows
         ]
-    finally:
-        conn.close()
 
 
 def acknowledge_anomaly(user_id: int, anomaly_id: int) -> bool:
-    conn = get_connection()
-    try:
-        cursor = conn.execute(
-            "UPDATE login_anomalies SET acknowledged_at=? WHERE id=? AND user_id=? AND acknowledged_at IS NULL",
+    with dao_session() as factory:
+        conn = factory.db
+        cursor = conn.execute(conn.sql(
+            "UPDATE login_anomalies SET acknowledged_at=? WHERE id=? AND user_id=? AND acknowledged_at IS NULL"),
             (datetime.now(timezone.utc).isoformat(), int(anomaly_id), int(user_id)),
         )
         conn.commit()
         return bool(cursor.rowcount > 0)
-    finally:
-        conn.close()
