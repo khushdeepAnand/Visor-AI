@@ -237,9 +237,14 @@
 ## Unreleased
 
 ### Features
+- route custom authentication through shared database backend
+- verify postgres parity and stage shared persistence adoption
+- restore v18 work and prepare Supabase path
 - publish verified StockPilot v18 foundation
 
 ### Fixes
+- resolve CI mutation gate failures and update release build
+- survive rate-limit 429s in parallel browser runs
 - E2E infinite retry on 429 for /api/v1/system - remove max retry limit to handle CI rate limits
 - E2E rate limit - increase max retries to 8 for /api/v1/system in CI
 - E2E rate limit retry - return failed response after max retries, increase max retries to 5
@@ -247,19 +252,9 @@
 - flaky E2E tests - robust research/screener assertions
 - CI failures - strict mode selector, system endpoint error handling, mypy Windows constants
 
+### Documentation
+- record verified integration checkpoint and release blockers
+
 ### Maintenance
 - update changelog
 - fix gitleaks config - use .gitleaks.toml allowlist for path-based false positives
-# Local continuation — 2026-10-05
-
-- Hardened model promotion policy, aggregate evidence minimums, rollback revocation
-  checks and transactionally serialized manifest exports.
-- Added signed persistent tier-decay widening and tier pauses at forecast
-  publication, with cache invalidation and authoritative artifact-matched evidence.
-- Added least-privilege support/model operations roles and operational UI.
-- Added scheduled encrypted main/registry backup restore drills; configured queues
-  no longer silently execute inline when durable submission is unavailable.
-- Added accessible reduced-motion uncertainty fan, command-palette keyboard fixes,
-  diagnostic wording corrections and a forecast-honesty regression gate.
-- Added aggregate Prometheus metrics and a monitoring Compose overlay. Infrastructure
-  deployment and the full master requirements remain explicitly unfinished.
