@@ -22,15 +22,10 @@ def clear_db_configuration(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
-def test_sqlite_source_is_byte_for_byte_unchanged():
-    # Captured from the working tree before this readiness change (not Git HEAD,
-    # which predates the user's intentionally uncommitted encrypted-DAO work).
-    # Git's text=auto can check out CRLF on Windows. Pin both exact byte
-    # representations of the same captured source; no code changes are allowed.
-    assert hashlib.sha256(Path(sqlite_impl.__file__).read_bytes()).hexdigest() in {
-        "bd3cec64230c00bbbb8c6373f0ed970afc32c1e04dbad60fc770503f4bedaf5f",  # LF
-        "d886cd5cee102f526f29d98ff0b17f6f429642eadfe2678ad24aa205c34a2937",  # CRLF
-    }
+# The prepare-only checkpoint's whole-file SQLite byte freeze is superseded
+# by the user-authorized repository adoption. Snapshot/connection behavior is
+# now proved by test_repository_snapshot.py; URL-selection byte parity below
+# remains a standing requirement.
 
 
 def test_default_sqlite_results_sql_and_database_bytes_ignore_future_urls(temp_db, monkeypatch):
@@ -111,14 +106,15 @@ def test_alembic_prefers_direct_url_only_when_postgres_selected(monkeypatch):
 def test_migration_runner_passes_direct_url_and_respects_explicit_override(monkeypatch):
     from alembic import command
     from scripts.run_migrations import upgrade_to_head
+    monkeypatch.setattr("scripts.run_migrations._current_revision", lambda url: "20261010_01")
     urls = []
     monkeypatch.setattr(command, "upgrade", lambda cfg, revision: urls.append(cfg.get_main_option("sqlalchemy.url")))
     monkeypatch.setenv("DB_BACKEND", "postgresql")
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused.invalid/pooled")
     monkeypatch.setenv("DATABASE_MIGRATION_URL", "postgresql://unused.invalid/direct")
-    assert upgrade_to_head() == "head"
+    assert upgrade_to_head() == "20261010_01"
     assert urls[-1] == "postgresql://unused.invalid/direct"
-    assert upgrade_to_head("postgresql://unused.invalid/explicit") == "head"
+    assert upgrade_to_head("postgresql://unused.invalid/explicit") == "20261010_01"
     assert urls[-1] == "postgresql://unused.invalid/explicit"
 
 
@@ -129,14 +125,45 @@ def test_explicit_postgres_migration_never_silently_uses_sqlite(monkeypatch):
         migration_url(sqlite_fallback="sqlite:///stockpilot.db")
 
 
-def test_legacy_single_url_selection_is_preserved_and_explicit_sqlite_stays_sqlite(temp_db, monkeypatch):
+def test_legacy_url_never_selects_postgres_without_an_explicit_selector(temp_db, monkeypatch):
     monkeypatch.setenv("STOCKPILOT_DATABASE_URL", "postgresql://unused.invalid/legacy")
     monkeypatch.setattr(factory, "PostgresDAOFactory", lambda dsn, size: (dsn, size))
+    result = factory.get_dao_factory()
+    assert type(result) is sqlite_impl.SQLiteDAOFactory
+    result.db.close()
+    monkeypatch.setenv("DB_BACKEND", "postgresql")
     assert factory.get_dao_factory() == ("postgresql://unused.invalid/legacy", 10)
     monkeypatch.setenv("DB_BACKEND", "sqlite")
     result = factory.get_dao_factory()
     assert type(result) is sqlite_impl.SQLiteDAOFactory
     result.db.close()
+
+
+@pytest.mark.parametrize("url", ["postgresql://unused.invalid:6543/db", "postgresql://test.pooler.supabase.com:5432/db"])
+def test_migrations_reject_known_supabase_poolers(url):
+    from services.db.configuration import migration_url
+    with pytest.raises(ValueError, match="direct PostgreSQL endpoint"):
+        migration_url(configured_url=url, sqlite_fallback="sqlite:///unused.db")
+
+
+def test_migration_failure_is_not_reported_as_success(monkeypatch):
+    from alembic import command
+    from scripts.run_migrations import upgrade_to_head
+    def fail(*args):
+        raise RuntimeError("disposable failure")
+    monkeypatch.setattr(command, "upgrade", fail)
+    with pytest.raises(RuntimeError, match="disposable failure"):
+        upgrade_to_head("postgresql://unused.invalid/direct")
+
+
+def test_incomplete_postgres_runtime_never_falls_back_to_application_sqlite(temp_db, monkeypatch):
+    import database
+    monkeypatch.setenv("DB_BACKEND", "postgresql")
+    with pytest.raises(RuntimeError, match="Refusing to write the application SQLite"):
+        database.get_connection()
+    # An explicitly scoped local sidecar remains available under either selector.
+    connection = database._open_connection(temp_db.parent / "local-sidecar.db")
+    connection.close()
 
 
 def test_parity_check_never_constructs_databases_and_detects_signature_drift(monkeypatch):

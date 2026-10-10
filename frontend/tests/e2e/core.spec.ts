@@ -57,9 +57,43 @@ await page.getByRole("button", { name: /Log out/i }).click();
   await page.getByLabel("Paper order side").selectOption("BUY");
   await page.getByPlaceholder(/Quantity/i).fill("1");
   await page.getByLabel("Required paper trade thesis").fill("Testing a deliberate paper-only decision.");
+  await page.getByRole("button", { name: "1D", exact: true }).click();
+  const cashBefore = await page.getByText("Cash", { exact: true }).locator("..").textContent();
+  await page.getByRole("button", { name: /Review paper order/i }).click();
+  // Change the shared context after review: confirmation must use the snapshot.
+  await page.getByRole("button", { name: "5m", exact: true }).click();
+  const submitted = page.waitForRequest((request) => request.url().endsWith("/api/v1/paper/orders") && request.method() === "POST");
+  await page.getByRole("button", { name: /Confirm simulation/i }).click();
+  expect((await submitted).postDataJSON()).toMatchObject({ symbol: "RELIANCE", timeframe: "1D", side: "BUY" });
+  await expect(page.getByRole("status").filter({ hasText: /recorded: FILLED/ })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Paper order decision pause" })).toHaveCount(0);
+  await expect(page.getByRole("alert").filter({ hasText: /market context/ })).toHaveCount(0);
+  const positions = page.getByRole("table").filter({ has: page.getByRole("columnheader", { name: "Contract", exact: true }) });
+  await expect(positions.getByRole("cell", { name: "RELIANCE", exact: true })).toBeVisible();
+  await expect(page.getByText("Cash", { exact: true }).locator("..")).not.toHaveText(cashBefore!);
+  const cashAfterBuy = await page.getByText("Cash", { exact: true }).locator("..").textContent();
+  await page.getByLabel("Paper order side").selectOption("SELL");
   await page.getByRole("button", { name: /Review paper order/i }).click();
   await page.getByRole("button", { name: /Confirm simulation/i }).click();
-  await expect(page.getByText(/Paper trade only/i)).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: /recorded: FILLED/ })).toBeVisible();
+  await expect(positions.getByRole("cell", { name: "RELIANCE", exact: true })).toHaveCount(0);
+  await expect(page.getByText("Cash", { exact: true }).locator("..")).not.toHaveText(cashAfterBuy!);
+
+  // A real recorded trade with malformed response context must still close
+  // the ticket and show its success alongside an explicit verification warning.
+  await page.route("**/api/v1/paper/orders", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    const response = await route.fetch();
+    const result = await response.json();
+    await route.fulfill({ response, json: { ...result, context: { ...result.context, timeframe: "1W" } } });
+  });
+  await page.getByLabel("Paper order side").selectOption("BUY");
+  await page.getByRole("button", { name: /Review paper order/i }).click();
+  await page.getByRole("button", { name: /Confirm simulation/i }).click();
+  await expect(page.getByRole("status").filter({ hasText: /recorded: FILLED/ })).toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: /This order was recorded/ })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Paper order decision pause" })).toHaveCount(0);
+  await expect(positions.getByRole("cell", { name: "RELIANCE", exact: true })).toBeVisible();
 
   await page.goto("/portfolio");
   await expect(page.getByRole("status").filter({ hasText: "Demo / synthetic data" })).toBeVisible();

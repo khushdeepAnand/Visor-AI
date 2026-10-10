@@ -115,7 +115,9 @@ def webauthn_mfa_verify_endpoint(
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     try:
-        user_id, next_path = consume_mfa_challenge_for_passkey(challenge)
+        from services.login_anomaly import DEVICE_COOKIE, token_device_hash
+        user_id, next_path = consume_mfa_challenge_for_passkey(challenge,
+            device_hash=token_device_hash(request.cookies.get(DEVICE_COOKIE, "")))
     except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 

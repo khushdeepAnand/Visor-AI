@@ -438,7 +438,7 @@ def disable_mfa(user_id: int, code: str) -> None:
         connection.close()
 
 
-def issue_mfa_challenge(user: dict[str, Any], *, next_path: str = "/") -> str:
+def issue_mfa_challenge(user: dict[str, Any], *, next_path: str = "/", device_hash: str | None = None) -> str:
     now = datetime.now(timezone.utc)
     expires = now + timedelta(minutes=MFA_CHALLENGE_MINUTES)
     jti = secrets.token_urlsafe(32)
@@ -452,6 +452,7 @@ def issue_mfa_challenge(user: dict[str, Any], *, next_path: str = "/") -> str:
         "jti": jti,
         "type": "mfa_challenge",
         "next": safe_next,
+        "device_hash": device_hash,
     }
     token = jwt.encode(payload, _secret(), algorithm=JWT_ALGORITHM)
     connection = get_connection()
@@ -470,7 +471,7 @@ def issue_mfa_challenge(user: dict[str, Any], *, next_path: str = "/") -> str:
     return token
 
 
-def complete_mfa_challenge(token: str, code: str) -> tuple[dict[str, Any], str, str]:
+def complete_mfa_challenge(token: str, code: str, *, device_hash: str | None = None) -> tuple[dict[str, Any], str, str]:
     try:
         payload = jwt.decode(
             token,
@@ -483,6 +484,8 @@ def complete_mfa_challenge(token: str, code: str) -> tuple[dict[str, Any], str, 
         raise ValueError("The verification challenge is invalid or expired.") from exc
     if payload.get("type") != "mfa_challenge":
         raise ValueError("The verification challenge is invalid or expired.")
+    if payload.get("device_hash") and payload["device_hash"] != device_hash:
+        raise ValueError("Verification must complete on the device that started sign-in.")
     user_id = int(payload["sub"])
     now = datetime.now(timezone.utc)
     connection = get_connection()
@@ -520,10 +523,13 @@ def complete_mfa_challenge(token: str, code: str) -> tuple[dict[str, Any], str, 
     user = get_user_by_id(user_id)
     if not user or user.get("account_status") != "active":
         raise ValueError("The verification challenge is invalid or expired.")
+    if payload.get("device_hash"):
+        from services.login_anomaly import confirm_device
+        confirm_device(user_id, str(payload["device_hash"]))
     return user, str(payload.get("next") or "/"), method
 
 
-def consume_mfa_challenge_for_passkey(token: str) -> tuple[int, str]:
+def consume_mfa_challenge_for_passkey(token: str, *, device_hash: str | None = None) -> tuple[int, str]:
     """Validate + consume an MFA challenge when a passkey assertion succeeded.
 
     The passkey cryptography was verified separately by services.webauthn;
@@ -542,6 +548,8 @@ def consume_mfa_challenge_for_passkey(token: str) -> tuple[int, str]:
         raise ValueError("The verification challenge is invalid or expired.") from exc
     if payload.get("type") != "mfa_challenge":
         raise ValueError("The verification challenge is invalid or expired.")
+    if payload.get("device_hash") and payload["device_hash"] != device_hash:
+        raise ValueError("Verification must complete on the device that started sign-in.")
     user_id = int(payload["sub"])
     now = datetime.now(timezone.utc)
     connection = get_connection()
@@ -564,6 +572,9 @@ def consume_mfa_challenge_for_passkey(token: str) -> tuple[int, str]:
         connection.commit()
     finally:
         connection.close()
+    if payload.get("device_hash"):
+        from services.login_anomaly import confirm_device
+        confirm_device(user_id, str(payload["device_hash"]))
     return user_id, str(payload.get("next") or "/")
 
 

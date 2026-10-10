@@ -9,7 +9,13 @@ This is signature evidence, not SQL correctness or behavioral-parity evidence.
 from __future__ import annotations
 
 import inspect
+import argparse
+import os
 import sys
+import tempfile
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -80,7 +86,394 @@ def check_parity(sqlite_module: ModuleType | None = None, postgres_module: Modul
     return issues
 
 
+def check_live_parity(url: str) -> list[str]:
+    """Exercise real DAOs in a unique schema on a loopback disposable database.
+
+    Never uses the user's SQLite source or a remote production database. The
+    generated test schema is the only PostgreSQL state removed on completion.
+    """
+    import database
+    import psycopg2
+    from psycopg2 import sql
+    from psycopg2.extensions import parse_dsn, make_dsn
+    from sqlalchemy.engine import make_url
+    from alembic import command
+    from alembic.config import Config
+    from services.db.postgres_impl import PostgresDAOFactory
+    from services.db.sqlite_impl import SQLiteDAOFactory
+
+    connection_info = parse_dsn(url)
+    if connection_info.get("host") not in {"127.0.0.1", "localhost", "::1"} or not connection_info.get("dbname", "").startswith("stockpilot_test"):
+        raise ValueError("Live parity requires a loopback disposable database named stockpilot_test*")
+    schema = "parity_" + uuid.uuid4().hex
+    admin = psycopg2.connect(url)
+    admin.autocommit = True
+    postgres = None
+    sqlite = None
+    saved = (database.DATABASE, database.DATABASE_DIR, database.SQLCIPHER_KEY, database.SQLCIPHER_KEY_FILE)
+    completed = []
+    try:
+        with admin.cursor() as cursor:
+            cursor.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+        scoped_url = make_url(url).update_query_dict({"options": "-csearch_path=" + schema})
+        cfg = Config(str(ROOT / "alembic.ini"))
+        cfg.set_main_option("script_location", str(ROOT / "alembic"))
+        cfg.set_main_option("sqlalchemy.url", scoped_url.render_as_string(hide_password=False).replace("%", "%%"))
+        command.upgrade(cfg, "head")
+        postgres = PostgresDAOFactory(make_dsn(url, options="-csearch_path=" + schema), pool_size=10)
+        version = postgres.db.fetchone("SELECT version_num FROM alembic_version")
+        assert version is not None and version["version_num"] == "20261010_02"
+        completed.append("clean PostgreSQL Alembic upgrade and inspected revision")
+        with tempfile.TemporaryDirectory(prefix="stockpilot-parity-") as temporary:
+            database.DATABASE = str(Path(temporary) / "parity.db")
+            database.DATABASE_DIR = temporary
+            database.SQLCIPHER_KEY = database.SQLCIPHER_KEY_FILE = None
+            database.create_tables()
+            from services.webauthn import _ensure_table
+            from services.login_anomaly import _ensure_tables
+            from services.admin_registry import _ensure_settings_table
+            from services.admin_step_up import STEP_UP
+            from services.forecast_guardrails import GUARDRAILS
+            from services.chart_layouts import CHART_LAYOUTS
+            from services.screener import SCREENS
+            from services.strategy_builder import STRATEGIES
+            from services.forward_test import FORWARD_TESTS
+            _ensure_table()
+            _ensure_tables()
+            connection = database.get_connection()
+            try:
+                _ensure_settings_table(connection)
+                connection.commit()
+                STEP_UP._ensure_schema(connection)
+                GUARDRAILS._ensure_schema(connection)
+            finally:
+                connection.close()
+            CHART_LAYOUTS._connect().close()
+            SCREENS._connect().close()
+            STRATEGIES.ensure_schema()
+            FORWARD_TESTS.ensure_schema()
+            sqlite = SQLiteDAOFactory()
+            sqlite_tables = {row["name"] for row in sqlite.db.fetchall("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+            pg_tables = {row["table_name"] for row in postgres.db.fetchall("SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema() AND table_name <> 'alembic_version'")}
+            assert sqlite_tables == pg_tables, "runtime tables differ from migrated schema"
+            for table in sorted(sqlite_tables):
+                sqlite_columns = {row["name"] for row in sqlite.db.fetchall('PRAGMA table_info("' + table + '")')}
+                pg_columns = {row["column_name"] for row in postgres.db.fetchall("SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=%s", (table,))}
+                assert sqlite_columns == pg_columns, "runtime columns differ: " + table
+            completed.append(f"all {len(sqlite_tables)} eagerly/lazily created runtime tables and columns match migrated PostgreSQL schema")
+            unprotected = postgres.db.fetchone("SELECT count(*) AS n FROM pg_class WHERE relnamespace=current_schema()::regnamespace AND relkind='r' AND relname <> 'alembic_version' AND NOT relrowsecurity")
+            assert unprotected is not None and unprotected["n"] == 0
+            completed.append("RLS enabled on every application table; no public policies introduced")
+            outcomes = [_probe_factory(factory) for factory in (sqlite, postgres)]
+            assert outcomes[0] == outcomes[1], "DAO result/behavior divergence"
+            completed.append("real SQLite/PostgreSQL behavior for all eight DAOs, ownership, provenance, official eligibility, duplicates and recovery consumption")
+            _probe_runtime_helpers(make_dsn(url, options="-csearch_path=" + schema), postgres, sqlite)
+            completed.append("explicit PostgreSQL selection routes portfolio/watchlist/prediction/audit helpers to shared DAOs with no SQLite writes")
+            _probe_rls(admin, schema)
+            completed.append("unprivileged role denied by grants; granting SELECT still returns zero rows under policy-free RLS; owner connection bypass identified")
+            _probe_concurrency(postgres)
+            completed.append("eight concurrent holding sales/watchlist inserts/recovery consumers with atomic ledger checks")
+            for factory in (sqlite, postgres):
+                placeholder = "%s" if factory is postgres else "?"
+                original = factory.db.fetchone("SELECT count(*) AS n FROM users")
+                assert original is not None
+                count = original["n"]
+                factory.db.execute(_probe_sql("INSERT INTO users(name,email,password) VALUES(?,?,?)", placeholder), ("Rollback", "rollback@example.test", "disabled"))
+                factory.db.rollback()
+                restored_count = factory.db.fetchone("SELECT count(*) AS n FROM users")
+                assert restored_count is not None and restored_count["n"] == count
+            completed.append("explicit transaction rollback on both real backends")
+            sqlite.db.close()
+            sqlite = None
+            _probe_migration(admin, url, cfg, Path(database.DATABASE), Path(temporary), schema + "_transfer")
+            completed.append("real SQLite-to-PostgreSQL transfer, authenticated backup restore, full-content reconciliation and idempotent retry on disposable data")
+    finally:
+        if sqlite is not None:
+            sqlite.db.close()
+        database.DATABASE, database.DATABASE_DIR, database.SQLCIPHER_KEY, database.SQLCIPHER_KEY_FILE = saved
+        if postgres is not None:
+            postgres.db._shutdown_pool()
+        with admin.cursor() as cursor:
+            cursor.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+        admin.close()
+    return completed
+
+
+def _probe_runtime_helpers(url: str, postgres: Any, sqlite: Any) -> None:
+    import database
+    from services.db.factory import close_dao_pools
+    names = ("DB_BACKEND", "DATABASE_URL")
+    saved = {name: os.environ.get(name) for name in names}
+    original = sqlite.db.fetchone("SELECT count(*) AS n FROM portfolio")["n"]
+    uid = postgres.create_user_dao().create_user("Runtime", "runtime@example.test", "disabled")
+    try:
+        os.environ["DB_BACKEND"] = "postgresql"
+        os.environ["DATABASE_URL"] = url
+        database.buy_stock(uid, "TCS", "TCS", 4, 100)
+        holding = database.get_portfolio(uid)[0]
+        assert holding[3] == 4 and len(database.get_transactions(uid)) == 1
+        assert not database.update_stock(holding[0], uid + 10000, 5, 100)
+        assert database.update_stock(holding[0], uid, 5, 100)
+        assert database.sell_stock(holding[0], uid, 2, 101)
+        assert database.get_portfolio(uid)[0][3] == 3
+        assert len(database.get_transactions(uid)) == 2
+        assert database.add_to_watchlist(uid, "tcs") and not database.add_to_watchlist(uid, "TCS")
+        watch = database.get_watchlist(uid)[0]
+        assert not database.remove_from_watchlist(watch[0], uid + 10000)
+        assert database.remove_from_watchlist(watch[0], uid)
+        assert database.delete_stock(holding[0], uid)
+        prediction_count = sqlite.db.fetchone("SELECT count(*) AS n FROM prediction_history")["n"]
+        database.save_prediction(uid, " tcs ", 100., None, None, payload={"source": "runtime-fixture"})
+        assert database.get_prediction_history(uid)[0][1] == "TCS"
+        assert database.get_prediction_details(uid, " tcs ")[0]["payload"] == {"source": "runtime-fixture"}
+        payload = {"generated_at": "2026-10-08T10:00:00+00:00", "forecast": {"low": 90., "median": 100., "high": 110., "confidence_level": .8},
+                   "training": {"timeframe": "1D"}, "context": {"provider": "upstox"}, "horizon": {"sessions": 1}}
+        fid = database.save_range_forecast(uid, "TCS", payload)
+        details = database.get_prediction_details(uid)
+        assert any(row["id"] == fid and row["snapshot_hash"] for row in details)
+        assert database.get_settled_range_forecasts(uid) == []
+        event = database.record_audit_event(uid, "runtime", details={"at": datetime(2026, 10, 8, tzinfo=timezone.utc)})
+        assert database.get_audit_events(uid)[0]["id"] == event
+        assert sqlite.db.fetchone("SELECT count(*) AS n FROM prediction_history")["n"] == prediction_count
+        assert sqlite.db.fetchone("SELECT count(*) AS n FROM portfolio")["n"] == original
+    finally:
+        close_dao_pools()
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def _probe_rls(admin: Any, schema: str) -> None:
+    import psycopg2
+    from psycopg2 import sql
+    role = schema + "_client"
+    with admin.cursor() as cursor:
+        cursor.execute(sql.SQL("CREATE ROLE {} NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT").format(sql.Identifier(role)))
+        try:
+            cursor.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(sql.Identifier(schema), sql.Identifier(role)))
+            cursor.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(role)))
+            try:
+                cursor.execute(sql.SQL("SELECT count(*) FROM {}.users").format(sql.Identifier(schema)))
+            except psycopg2.errors.InsufficientPrivilege:
+                pass
+            else:
+                raise AssertionError("unprivileged role bypassed revoked grants")
+            finally:
+                cursor.execute("RESET ROLE")
+            cursor.execute(sql.SQL("GRANT SELECT ON {}.users TO {}").format(sql.Identifier(schema), sql.Identifier(role)))
+            cursor.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(role)))
+            cursor.execute(sql.SQL("SELECT count(*) FROM {}.users").format(sql.Identifier(schema)))
+            assert cursor.fetchone()[0] == 0, "policy-free RLS exposed users"
+            cursor.execute("RESET ROLE")
+            cursor.execute("SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname=current_user")
+            assert any(cursor.fetchone()), "expected disposable bootstrap owner to bypass RLS"
+        finally:
+            cursor.execute("RESET ROLE")
+            cursor.execute(sql.SQL("REVOKE SELECT ON {}.users FROM {}").format(sql.Identifier(schema), sql.Identifier(role)))
+            cursor.execute(sql.SQL("REVOKE USAGE ON SCHEMA {} FROM {}").format(sql.Identifier(schema), sql.Identifier(role)))
+            cursor.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
+
+
+def _probe_migration(admin: Any, url: str, cfg: Any, source: Path, temporary: Path, schema: str) -> None:
+    from psycopg2 import sql
+    from sqlalchemy.engine import make_url
+    from alembic import command
+    from scripts.migrate_sqlite_to_postgres import transfer
+    import secrets
+    secret = secrets.token_urlsafe(48)
+    scoped_url = make_url(url).update_query_dict({"options": "-csearch_path=" + schema}).render_as_string(hide_password=False)
+    with admin.cursor() as cursor:
+        cursor.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+    try:
+        cfg.set_main_option("sqlalchemy.url", scoped_url.replace("%", "%%"))
+        command.upgrade(cfg, "head")
+        first = transfer(source, scoped_url, approved=True, backup=temporary / "rehearsal.enc", backup_secret=secret)
+        assert first["mode"] == "approved-transfer" and first["backup_restore_verified"]
+        assert all(table["content_verified"] for table in first["tables"].values())
+        second = transfer(source, scoped_url, approved=True, backup=temporary / "retry.enc", backup_secret=secret)
+        assert second["mode"] == "already-matches" and second["tables"] == first["tables"]
+    finally:
+        with admin.cursor() as cursor:
+            cursor.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+
+
+def _probe_sql(query: str, placeholder: str) -> str:
+    """Only fixed probe statements use this; all row values remain bound."""
+    return query.replace("?", placeholder)
+
+
+def _probe_factory(factory: Any) -> dict[str, Any]:
+    from services.db.postgres_impl import PostgresDatabase
+    import sqlite3
+    import psycopg2
+    placeholder = "%s" if isinstance(factory.db, PostgresDatabase) else "?"
+    user = factory.create_user_dao()
+    uid = user.create_user("Parity", "parity@example.test", "disabled", date_of_birth="1990-01-01")
+    other = user.create_user("Other", "other@example.test", "disabled")
+    assert user.get_user_by_email("parity@example.test")["id"] == uid
+    assert user.update_user(uid, name="Updated")
+    assert user.get_user_by_id(uid)["name"] == "Updated"
+    for key in ("name = NULL --", "unexpected"):
+        try:
+            user.update_user(uid, **{key: "bad"})
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("unsafe identifier accepted")
+    user.set_mfa_secret(uid, "encrypted-fixture")
+    factory.db.execute(_probe_sql("UPDATE user_mfa SET last_totp_counter=42 WHERE user_id=?", placeholder), (uid,))
+    factory.db.commit()
+    user.set_mfa_secret(uid, "replacement-fixture")
+    assert factory.db.fetchone(_probe_sql("SELECT last_totp_counter FROM user_mfa WHERE user_id=?", placeholder), (uid,))["last_totp_counter"] is None
+    assert user.get_mfa_secret(uid) == "replacement-fixture"
+    user.disable_mfa(uid)
+    assert user.get_mfa_secret(uid) is None
+    user.enable_mfa(uid)
+    assert user.get_mfa_secret(uid) == "replacement-fixture"
+    user.add_recovery_code(uid, "fixture-hash")
+    assert list(user.get_recovery_codes(uid)) == ["fixture-hash"]
+    try:
+        user.add_recovery_code(uid, "fixture-hash")
+    except (sqlite3.IntegrityError, psycopg2.IntegrityError):
+        factory.db.rollback()
+    else:
+        raise AssertionError("duplicate recovery code did not fail")
+    assert not user.use_recovery_code(other, "fixture-hash")
+    assert user.use_recovery_code(uid, "fixture-hash")
+    assert not user.use_recovery_code(uid, "fixture-hash")
+    holding = factory.create_portfolio_dao()
+    hid = holding.add_holding(uid, "TCS", "TCS", 10, 100)
+    assert not holding.update_holding(hid, other, 20, 100)
+    assert not holding.delete_holding(hid, other)
+    assert not holding.sell_holding(hid, other, 1, 101)
+    assert holding.sell_holding(hid, uid, 3, 101)
+    assert holding.get_holdings(uid)[0]["shares"] == 7
+    try:
+        holding.sell_holding(hid, uid, 8, 101)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("oversale accepted")
+    assert holding.get_holdings(uid)[0]["shares"] == 7
+    transactions = factory.create_transaction_dao()
+    assert len(transactions.get_transactions(uid)) == 1
+    transactions.add_transaction(uid, "TCS", "BUY", 1, 99)
+    assert len(transactions.get_transactions(uid)) == 2
+    # The ledger fails after the holding insert, proving the purchase is atomic
+    # rather than two separately committed DAO calls.
+    if isinstance(factory.db, PostgresDatabase):
+        factory.db.execute("""CREATE FUNCTION parity_reject_buy() RETURNS trigger AS $$
+            BEGIN IF NEW.symbol='FAIL' THEN RAISE EXCEPTION 'disposable ledger failure'; END IF;
+            RETURN NEW; END; $$ LANGUAGE plpgsql""")
+        factory.db.execute("CREATE TRIGGER parity_reject_buy BEFORE INSERT ON transactions FOR EACH ROW EXECUTE FUNCTION parity_reject_buy()")
+    else:
+        factory.db.execute("""CREATE TRIGGER parity_reject_buy BEFORE INSERT ON transactions WHEN NEW.symbol='FAIL'
+            BEGIN SELECT RAISE(ABORT,'disposable ledger failure'); END""")
+    factory.db.commit()
+    try:
+        holding.buy_holding(uid, "FAIL", "FAIL", 1, 100)
+    except (sqlite3.IntegrityError, psycopg2.Error):
+        factory.db.rollback()
+    else:
+        raise AssertionError("ledger failure was swallowed")
+    assert not factory.db.fetchone("SELECT id FROM portfolio WHERE symbol='FAIL'")
+    if isinstance(factory.db, PostgresDatabase):
+        factory.db.execute("DROP TRIGGER parity_reject_buy ON transactions")
+        factory.db.execute("DROP FUNCTION parity_reject_buy()")
+    else:
+        factory.db.execute("DROP TRIGGER parity_reject_buy")
+    factory.db.commit()
+    watch = factory.create_watchlist_dao()
+    assert watch.add_symbol(uid, "tcs") and not watch.add_symbol(uid, "TCS")
+    wid = watch.get_watchlist(uid)[0]["id"]
+    assert not watch.remove_symbol(wid, other)
+    assert watch.remove_symbol(wid, uid)
+    paper = factory.create_paper_trading_dao()
+    paper.create_account(uid, 1000)
+    try:
+        paper.create_account(uid, 9000)
+    except (sqlite3.IntegrityError, psycopg2.IntegrityError):
+        factory.db.rollback()
+    else:
+        raise AssertionError("duplicate paper account did not fail")
+    assert paper.get_account(uid)["cash_balance"] == 1000
+    assert list(paper.get_positions(uid)) == list(paper.get_orders(uid)) == []
+    settings = factory.create_settings_dao()
+    factory.db.execute(_probe_sql("INSERT INTO settings(user_id) VALUES(?)", placeholder), (uid,))
+    factory.db.commit()
+    assert settings.update_settings(uid, theme="Light")
+    assert settings.get_settings(uid)["theme"] == "Light"
+    audit = factory.create_audit_dao()
+    audit.record_event(uid, "parity", details={"nested": [1, True, None]})
+    assert audit.get_events(uid)[0]["details"] == {"nested": [1, True, None]}
+    assert not audit.get_events(other)
+    predictions = factory.create_prediction_dao()
+    pid = predictions.save_prediction(uid, " tcs ", linear_prediction=100, payload={"nested": [1, True]})
+    history = predictions.get_prediction_history(uid, 0)
+    assert history[0]["id"] == pid and history[0]["symbol"] == "TCS"
+    assert set(history[0]) == {"id", "symbol", "linear", "dt", "rf", "date"}
+    assert predictions.get_prediction_details(uid, " tcs ", 0)[0]["payload"] == {"nested": [1, True]}
+    assert not predictions.get_prediction_details(other)
+    payload = {"generated_at": "2026-10-08T10:00:00+00:00", "forecast": {"low": 90., "median": 100., "high": 110., "confidence_level": .8},
+               "training": {"timeframe": "1D"}, "context": {"provider": "upstox"}, "horizon": {"sessions": 1}}
+    fid = predictions.save_range_forecast(uid, "TCS", payload)
+    snapshot = factory.db.fetchone(_probe_sql("SELECT * FROM prediction_history WHERE id=?", placeholder), (fid,))
+    assert snapshot["snapshot_hash"] and snapshot["forecast_low"] == 90
+    # Manual, stale, demo, incomplete and abstained outcomes must all be excluded.
+    for index, (source, stale, demo, official, status, score) in enumerate([
+        ("automatic", 0, 0, 1, "available", 1.), ("manual", 0, 0, 1, "available", 1.),
+        ("automatic", 1, 0, 1, "available", 1.), ("automatic", 0, 1, 1, "available", 1.),
+        ("automatic", 0, 0, 0, "available", 1.), ("automatic", 0, 0, 1, "abstained", 1.),
+        ("automatic", 0, 0, 1, "available", None),
+    ]):
+        values = (uid, "TCS", 90., 100., 110., .8, 100., 1, score, source, stale, demo, official, status)
+        factory.db.execute(_probe_sql("""INSERT INTO prediction_history(user_id,symbol,forecast_low,forecast_median,forecast_high,confidence_level,
+            actual_price,coverage_hit,winkler_score,settlement_source,settlement_is_stale,settlement_is_demo,official_outcome,forecast_status,outcome_status)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'settled')""", placeholder), values)
+    factory.db.commit()
+    settled = predictions.get_settled_forecasts(uid)
+    assert len(settled) == 1 and not predictions.get_settled_forecasts(other)
+    # Forecast snapshot immutability must actually be enforced by the DB.
+    try:
+        factory.db.execute(_probe_sql("UPDATE prediction_history SET forecast_low=1 WHERE id=?", placeholder), (fid,))
+        factory.db.commit()
+    except (sqlite3.IntegrityError, psycopg2.Error):
+        factory.db.rollback()
+    else:
+        raise AssertionError("immutable forecast was modified")
+    snapshot.pop("id")
+    snapshot.pop("prediction_date")  # PG's existing TIMESTAMP is driver-native.
+    return {"snapshot": snapshot, "settled_keys": sorted(settled[0]), "history_keys": sorted(history[0])}
+
+
+def _probe_concurrency(factory: Any) -> None:
+    uid = factory.create_user_dao().create_user("Concurrent", "concurrent@example.test", "disabled")
+    hid = factory.create_portfolio_dao().add_holding(uid, "INFY", "INFY", 5, 100)
+    factory.create_user_dao().add_recovery_code(uid, "single-use")
+    factory.db.close()
+
+    def worker(_: int) -> tuple[bool, bool, bool]:
+        try:
+            watch = factory.create_watchlist_dao().add_symbol(uid, "INFY")
+            recovery = factory.create_user_dao().use_recovery_code(uid, "single-use")
+            sale = factory.create_portfolio_dao().sell_holding(hid, uid, 1, 101)
+            return watch, recovery, sale
+        finally:
+            factory.db.close()
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(worker, range(8)))
+    assert tuple(sum(result[i] for result in results) for i in range(3)) == (1, 1, 5)
+    assert not factory.create_portfolio_dao().get_holdings(uid)
+    assert len(factory.create_transaction_dao().get_transactions(uid)) == 5
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--live", action="store_true", help="Run real parity using DATABASE_MIGRATION_URL on a loopback stockpilot_test* database")
+    args = parser.parse_args()
     issues = check_parity()
     if issues:
         print("Backend signature parity FAILED (non-connecting):")
@@ -89,7 +482,20 @@ def main() -> int:
         return 1
     print("Backend signature parity passed (non-connecting).")
     print("Constructors/private helpers and contract-specific driver return types differ by design.")
-    print("Behavioral gaps remain documented in DEPLOYMENT.md; signature parity is not switch approval.")
+    if args.live:
+        url = os.getenv("DATABASE_MIGRATION_URL")
+        if not url:
+            print("Live parity requires DATABASE_MIGRATION_URL.", file=sys.stderr)
+            return 1
+        try:
+            completed = check_live_parity(url)
+        except Exception as exc:
+            print(f"Live backend parity FAILED ({type(exc).__name__}); no connectivity or correctness pass claimed.", file=sys.stderr)
+            return 1
+        for item in completed:
+            print("PASS: " + item)
+    else:
+        print("Use --live for disposable real-PostgreSQL evidence. Signature parity is not switch approval.")
     return 0
 
 

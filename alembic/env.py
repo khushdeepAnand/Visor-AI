@@ -11,7 +11,7 @@ from alembic import context
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from services.db.configuration import migration_url
+from services.db.configuration import migration_url, sqlalchemy_url
 
 # This is the Alembic Config object
 config = context.config
@@ -51,7 +51,7 @@ def run_migrations_online() -> None:
     database_url = get_database_url()
     
     connectable = create_engine(
-        database_url,
+        sqlalchemy_url(database_url),
         poolclass=pool.NullPool,
     )
 
@@ -64,6 +64,7 @@ def run_migrations_online() -> None:
 
         with context.begin_transaction():
             context.run_migrations()
+    connectable.dispose()
 
 
 if context.is_offline_mode():

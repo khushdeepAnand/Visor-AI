@@ -10,6 +10,13 @@ from services.market_data.live_hub import LiveQuoteHub, STREAM_STALE_AFTER_SECON
 from services.market_data.streaming.base import NormalizedTick
 
 
+@pytest.fixture(autouse=True)
+def isolated_stream_credentials(monkeypatch):
+    monkeypatch.setenv("UPSTOX_ACCESS_TOKEN", "")
+    monkeypatch.setenv("UPSTOX_ANALYTICS_TOKEN", "")
+    monkeypatch.setenv("STOCKPILOT_STREAM_PROVIDER", "upstox")
+
+
 @pytest.mark.asyncio
 async def test_healthy_stream_suppresses_rest_polling(monkeypatch):
     hub = LiveQuoteHub()

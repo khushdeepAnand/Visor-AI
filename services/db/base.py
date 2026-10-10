@@ -117,6 +117,11 @@ class PortfolioDAO(abc.ABC):
     def add_holding(self, user_id: int, symbol: str, company: str, shares: float, buy_price: float) -> int:
         """Add a portfolio holding. Returns holding ID."""
         pass
+
+    @abc.abstractmethod
+    def buy_holding(self, user_id: int, symbol: str, company: str, shares: float, buy_price: float) -> int:
+        """Create a holding and its BUY ledger entry in one transaction."""
+        pass
     
     @abc.abstractmethod
     def get_holdings(self, user_id: int) -> Sequence[dict[str, Any]]:
@@ -259,6 +264,12 @@ class SettingsDAO(abc.ABC):
 
 class DAOFactory(abc.ABC):
     """Factory for creating DAO instances."""
+
+    @property
+    @abc.abstractmethod
+    def db(self) -> DatabaseInterface:
+        """Owning transaction/connection wrapper for these DAOs."""
+        pass
     
     @abc.abstractmethod
     def create_user_dao(self) -> UserDAO:

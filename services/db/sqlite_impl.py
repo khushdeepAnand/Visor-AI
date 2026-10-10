@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+import math
 from .update_fields import USER_FIELDS, SETTINGS_FIELDS, validate_fields
 from datetime import datetime, timezone
 from typing import Any, Optional, Sequence
@@ -181,6 +182,23 @@ class SQLitePortfolioDAO(PortfolioDAO):
                FROM portfolio WHERE user_id = ? ORDER BY buy_date DESC, id DESC""",
             (user_id,)
         )
+
+    def buy_holding(self, user_id: int, symbol: str, company: str, shares: float, buy_price: float) -> int:
+        try:
+            cursor = self.db.execute(
+                "INSERT INTO portfolio(user_id,symbol,company,shares,buy_price) VALUES(?,?,?,?,?)",
+                (user_id, symbol, company, shares, buy_price),
+            )
+            row_id = int(cursor.lastrowid or 0)
+            self.db.execute(
+                "INSERT INTO transactions(user_id,symbol,transaction_type,shares,price) VALUES(?,?,'BUY',?,?)",
+                (user_id, symbol, shares, buy_price),
+            )
+            self.db.commit()
+            return row_id
+        except Exception:
+            self.db.rollback()
+            raise
     
     def update_holding(self, holding_id: int, user_id: int, shares: float, buy_price: float) -> bool:
         cursor = self.db.execute(
@@ -199,15 +217,20 @@ class SQLitePortfolioDAO(PortfolioDAO):
         return cursor.rowcount > 0
     
     def sell_holding(self, holding_id: int, user_id: int, shares: float, sell_price: float) -> bool:
+        if not math.isfinite(shares) or shares <= 0 or not math.isfinite(sell_price) or sell_price < 0:
+            raise ValueError("Sale quantity must be finite and positive; price must be finite and nonnegative.")
         conn = self.db.get_connection()
         cursor = conn.cursor()
         try:
+            if not conn.in_transaction:
+                conn.execute("BEGIN IMMEDIATE")
             cursor.execute(
                 "SELECT symbol, shares FROM portfolio WHERE id = ? AND user_id = ?",
                 (holding_id, user_id)
             )
             holding = cursor.fetchone()
             if not holding:
+                self.db.rollback()
                 return False
             
             symbol, available_shares = holding["symbol"], holding["shares"]
@@ -236,6 +259,8 @@ class SQLitePortfolioDAO(PortfolioDAO):
         except Exception:
             self.db.rollback()
             raise
+        finally:
+            cursor.close()
 
 
 class SQLiteWatchlistDAO(WatchlistDAO):
@@ -309,22 +334,21 @@ class SQLitePredictionDAO(PredictionDAO):
         self.db = db
     
     def save_prediction(self, user_id: int, symbol: str, **kwargs: Any) -> int:
-        # Use the existing database module's save_prediction
-        from database import save_prediction
-        save_prediction(
-            user_id, kwargs.get("symbol", ""),
-            kwargs.get("linear_prediction"), kwargs.get("decision_tree_prediction"),
-            kwargs.get("random_forest_prediction"), kwargs.get("prediction_date"),
-            consensus_prediction=kwargs.get("consensus_prediction"),
-            best_model=kwargs.get("best_model"),
-            model_version=kwargs.get("model_version"),
-            payload=kwargs.get("payload")
+        import json
+        from database import _serialize_prediction_date
+        payload = kwargs.get("payload")
+        cursor = self.db.execute(
+            """INSERT INTO prediction_history(user_id,symbol,linear_prediction,decision_tree_prediction,
+               random_forest_prediction,prediction_date,consensus_prediction,best_model,model_version,payload_json)
+               VALUES(?,?,?,?,?,COALESCE(?,CURRENT_TIMESTAMP),?,?,?,?)""",
+            (user_id, symbol.strip().upper(), kwargs.get("linear_prediction"), kwargs.get("decision_tree_prediction"),
+             kwargs.get("random_forest_prediction"), _serialize_prediction_date(kwargs.get("prediction_date")),
+             kwargs.get("consensus_prediction"), kwargs.get("best_model"), kwargs.get("model_version"),
+             json.dumps(payload, default=str) if isinstance(payload, dict) else None),
         )
-        # Return the last inserted ID
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT last_insert_rowid()")
-        return int(cursor.fetchone()[0])
+        row_id = int(cursor.lastrowid or 0)
+        self.db.commit()
+        return row_id
     
     def get_prediction_history(self, user_id: int, limit: int = 50) -> Sequence[dict[str, Any]]:
         from database import get_prediction_history
@@ -337,12 +361,20 @@ class SQLitePredictionDAO(PredictionDAO):
         return [dict(row) for row in get_prediction_details(user_id, symbol, limit)]
     
     def save_range_forecast(self, user_id: int, symbol: str, forecast_payload: dict[str, Any]) -> int:
-        from database import save_range_forecast
-        save_range_forecast(user_id, symbol, forecast_payload)
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT last_insert_rowid()")
-        return int(cursor.fetchone()[0])
+        from database import range_forecast_values
+        cursor = self.db.execute(
+            """INSERT INTO prediction_history(
+               user_id,symbol,consensus_prediction,model_version,payload_json,
+               forecast_low,forecast_median,forecast_high,confidence_level,training_window,timeframe,
+               prediction_date,created_at,origin_timestamp,target_timestamp,provider,data_timestamp,
+               feature_timestamp,data_version,schema_version,forecast_evidence_json,forecast_status,
+               snapshot_hash,outcome_status,official_outcome,horizon,horizon_sessions)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            range_forecast_values(user_id, symbol, forecast_payload),
+        )
+        row_id = int(cursor.lastrowid or 0)
+        self.db.commit()
+        return row_id
     
     def get_settled_forecasts(self, user_id: int, limit: int = 500) -> Sequence[dict[str, Any]]:
         from database import get_settled_range_forecasts

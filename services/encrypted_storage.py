@@ -8,6 +8,7 @@ import os
 import sqlite3
 import tempfile
 import uuid
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -90,9 +91,14 @@ def create_encrypted_backup(source: Path, target: Path, secret: str, *, database
             encrypt_database_copy(source, snapshot, database_key, source_key=database_key)
             data = snapshot.read_bytes()  # temporary snapshot is itself encrypted
     else:
-        with sqlite3.connect(source.as_uri() + "?mode=ro", uri=True) as conn, sqlite3.connect(":memory:") as snapshot_conn:
+        with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)) as conn, closing(sqlite3.connect(":memory:")) as snapshot_conn:
             conn.backup(snapshot_conn)
             data = snapshot_conn.serialize()  # plaintext snapshot never touches disk
+            # sqlite3_deserialize requires rollback-mode header bytes (18/19)
+            # for a standalone WAL snapshot. SQLite documents this normalization;
+            # the consistent backup pages and the live source remain unchanged.
+            if data[18:20] == b"\x02\x02":
+                data = data[:18] + b"\x01\x01" + data[20:]
     digest = hashlib.sha256(data).hexdigest()
     payload = {"version": 1, "sha256": digest, "encrypted_database": bool(database_key), "data": base64.b64encode(data).decode()}
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -158,7 +164,7 @@ def backup_and_rehearse(sources: list[Path], destination: Path, secret: str, *,
             data = base64.b64decode(payload["data"], validate=True)
             if hashlib.sha256(data).hexdigest() != result["sha256"]:
                 raise RuntimeError("Restore drill content mismatch")
-            with sqlite3.connect(":memory:") as conn:
+            with closing(sqlite3.connect(":memory:")) as conn:
                 conn.deserialize(data)
                 if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                     raise RuntimeError("Restore drill database integrity failed")

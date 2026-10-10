@@ -182,7 +182,11 @@ def normalize_ohlcv(frame: pd.DataFrame, *, source: str, symbol: str, timeframe:
     if applied_labels:
         data.attrs["price_adjustment"] = "adjusted"
     data.attrs.update(assess_corporate_actions(data))
-    return data
+    from .quality import validate_prices
+    try:
+        return validate_prices(data)
+    except ValueError as exc:
+        raise ProviderUnavailableError(f"{source} history failed price-quality validation") from exc
 
 
 def assess_corporate_actions(frame: pd.DataFrame) -> dict[str, Any]:

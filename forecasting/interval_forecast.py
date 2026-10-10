@@ -1619,6 +1619,13 @@ def _run_horizon(
         "cal_scores": cal_scores.tolist() if isinstance(cal_scores, np.ndarray) else cal_scores,
         "cal_scales": cal_scales.tolist() if isinstance(cal_scales, np.ndarray) else cal_scales,
         "X_cal_index": X_cal.index.tolist(),
+        # Internal replay evidence for paired research comparisons; never serialized
+        # wholesale into the public forecast contract.
+        "test_index": X_test.index.tolist(),
+        "test_actual": actual,
+        "test_median": blended_test,
+        "test_low": final_low_test,
+        "test_high": final_high_test,
     }
 
 
@@ -2424,6 +2431,15 @@ def forecast_range(
         "explainability": explainability,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "disclaimer": "Research and paper-trading simulation only; not investment advice.",
+    }
+
+    payload["next_day_evidence"] = {
+        "available": 1 in runs and resolved_timeframe == "1D",
+        "published_model": "existing_direct_horizon_pipeline",
+        "specialist_status": "research_only_pending_next_day_promotion",
+        "evidence_grade": runs[1]["sufficiency"].evidence_grade if 1 in runs and resolved_timeframe == "1D" else "none",
+        "calibration": runs[1]["metrics"].to_dict() if 1 in runs and resolved_timeframe == "1D" else None,
+        "basis": "Untouched horizon=1 test fold; intraday next-bar evidence is not next-session evidence.",
     }
 
     # v14 context is optional and additive. Provider calls only occur when a

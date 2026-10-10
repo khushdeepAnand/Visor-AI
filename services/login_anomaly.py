@@ -26,6 +26,7 @@ import json
 import math
 import os
 import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -33,6 +34,16 @@ from database import get_connection
 
 DEFAULT_MAX_TRAVEL_KMH = float(os.getenv("STOCKPILOT_MAX_TRAVEL_KMH", "900"))
 NEW_DEVICE_WINDOW_DAYS = int(os.getenv("STOCKPILOT_NEW_DEVICE_WINDOW_DAYS", "90"))
+DEVICE_COOKIE = "stockpilot_device"
+
+
+def device_token(request: Any) -> str:
+    value = str(request.cookies.get(DEVICE_COOKIE, ""))
+    return value if re.fullmatch(r"[0-9a-f]{64}", value) else secrets.token_hex(32)
+
+
+def token_device_hash(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
 
 # Cities used for coarse geolocation via configured resolver lookups
 # (kept minimal; pluggable through STOCKPILOT_GEO_RESOLVER=module:function).
@@ -81,6 +92,9 @@ def _ensure_tables() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_login_anomalies_user ON login_anomalies(user_id, created_at)"
         )
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(login_devices)")}
+        if "confirmed_at" not in columns:
+            conn.execute("ALTER TABLE login_devices ADD COLUMN confirmed_at TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -159,6 +173,7 @@ def record_login(
     user_agent: str = "",
     ip: str | None = None,
     at: datetime | None = None,
+    device_hash: str | None = None,
 ) -> dict[str, Any]:
     """Record a successful login and return detected anomalies.
 
@@ -166,8 +181,10 @@ def record_login(
     Never raises -- anomaly detection must not block authentication.
     """
     try:
-        return _record_login_inner(user_id, user_agent, ip, at)
+        return _record_login_inner(user_id, user_agent, ip, at, device_hash)
     except Exception:
+        if strict_mode():
+            raise
         # Detection is best-effort; never block the login path.
         return {"new_device": False, "impossible_travel": False, "anomalies": []}
 
@@ -177,10 +194,11 @@ def _record_login_inner(
     user_agent: str,
     ip: str | None,
     at: datetime | None,
+    supplied_device_hash: str | None = None,
 ) -> dict[str, Any]:
     _ensure_tables()
     at = at or datetime.now(timezone.utc)
-    device_hash = hash_device(user_agent, ip)
+    device_hash = supplied_device_hash or hash_device(user_agent, ip)
     prefix = ip_prefix(ip)
     coords = geolocate(prefix)
 
@@ -271,11 +289,14 @@ def _record_login_inner(
     except Exception:
         # Detection is best-effort; never block the login path.
         conn.rollback()
+        if strict_mode():
+            raise
         return {"new_device": False, "impossible_travel": False, "anomalies": []}
     finally:
         conn.close()
 
     return {
+        "device_hash": device_hash,
         "new_device": new_device,
         "impossible_travel": impossible_travel,
         "anomalies": anomalies,
@@ -296,6 +317,31 @@ def _parse_time(value: Any) -> datetime | None:
 
 def strict_mode() -> bool:
     return os.getenv("STOCKPILOT_LOGIN_ANOMALY_STRICT", "").strip().lower() in ("1", "true", "yes")
+
+
+def confirm_device(user_id: int, device_hash: str) -> None:
+    """Called only after independent MFA proof; acknowledging an alert cannot trust a device."""
+    _ensure_tables()
+    conn = get_connection()
+    try:
+        cursor = conn.execute("UPDATE login_devices SET confirmed_at=? WHERE user_id=? AND device_hash=?",
+                              (datetime.now(timezone.utc).isoformat(), user_id, device_hash))
+        if cursor.rowcount != 1:
+            raise ValueError("Pending login device is unavailable; sign in again")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def device_confirmed(user_id: int, device_hash: str) -> bool:
+    _ensure_tables()
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT confirmed_at FROM login_devices WHERE user_id=? AND device_hash=?", (user_id, device_hash)).fetchone()
+        confirmed = _parse_time(row[0]) if row else None
+        return confirmed is not None and timedelta(0) <= datetime.now(timezone.utc) - confirmed <= timedelta(days=NEW_DEVICE_WINDOW_DAYS)
+    finally:
+        conn.close()
 
 
 def anomalies_for_user(user_id: int, limit: int = 50) -> list[dict[str, Any]]:

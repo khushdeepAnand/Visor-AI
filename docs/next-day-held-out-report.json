@@ -1,0 +1,470 @@
+{
+  "version": "next-day-quantile-v2",
+  "status": "evaluated_research_only",
+  "published": false,
+  "reports": [
+    {
+      "version": "next-day-quantile-v2",
+      "symbol": "INDIA VIX",
+      "horizon_sessions": 1,
+      "timeframe": "1D",
+      "tier": "T2",
+      "evidence_grade": "C",
+      "split": {
+        "train": 174,
+        "calibration": 19,
+        "test": 20,
+        "purge_sessions": 1
+      },
+      "train_end": "2026-08-07 10:00:00+00:00",
+      "calibration_start": "2026-08-11 10:00:00+00:00",
+      "calibration_end": "2026-09-04 10:00:00+00:00",
+      "test_start": "2026-09-08 10:00:00+00:00",
+      "test_end": "2026-10-07 10:00:00+00:00",
+      "signals": [
+        "return_1",
+        "return_3",
+        "gap_last",
+        "gap_mean_20",
+        "gap_std_20",
+        "range_1",
+        "rv_1",
+        "range_2",
+        "rv_2",
+        "range_3",
+        "rv_3",
+        "rv_5",
+        "rv_22",
+        "intraday_return",
+        "close_location",
+        "volume_ratio",
+        "volume_ratio_available",
+        "close_location_available"
+      ],
+      "sequence_candidate": "not_requested",
+      "candidates": {
+        "gbm": {
+          "samples": 20,
+          "coverage": 0.65,
+          "winkler": 3.4284860119854863,
+          "baseline_winkler": 3.6529981895851895,
+          "mase_vs_naive": 1.006932668038874,
+          "pinball": [
+            {
+              "quantile": 0.09999999999999998,
+              "loss": 0.13302476763387486,
+              "n_samples": 20
+            },
+            {
+              "quantile": 0.5,
+              "loss": 0.36023016199090707,
+              "n_samples": 20
+            },
+            {
+              "quantile": 0.9,
+              "loss": 0.20982383356467374,
+              "n_samples": 20
+            }
+          ],
+          "dm_vs_shared": {
+            "dm_statistic": -1.101853942136051,
+            "p_value": 0.13526258739617153,
+            "alternative": "less",
+            "h": 1,
+            "loss_function": "relative_winkler",
+            "reject_null": false
+          },
+          "conditional_coverage": {
+            "overall": 0.65
+          },
+          "event_samples": {
+            "large_overnight_gap": 0
+          },
+          "event_evidence_complete": false,
+          "options_benchmark": null,
+          "existing_gates": {
+            "timestamp": "2026-10-09T05:22:08.842261+00:00",
+            "tiers_total": 2,
+            "tiers_passed": 0,
+            "overall_passed": false,
+            "tier_results": {
+              "T2": {
+                "passed": false,
+                "checks": {
+                  "min_forecasts": false,
+                  "coverage": false,
+                  "mase": false,
+                  "winkler": true,
+                  "diebold_mariano": false,
+                  "conditional_coverage": true,
+                  "pinball": true
+                },
+                "reason": "Tier T2: FAILED checks: min_forecasts, coverage, mase, diebold_mariano"
+              },
+              "overall": {
+                "passed": false,
+                "checks": {
+                  "min_forecasts": false,
+                  "coverage": false,
+                  "mase": false,
+                  "winkler": true,
+                  "diebold_mariano": false,
+                  "conditional_coverage": true,
+                  "pinball": true
+                },
+                "reason": "Tier overall: FAILED checks: min_forecasts, coverage, mase, diebold_mariano"
+              }
+            }
+          },
+          "eligible_for_promotion_review": false
+        },
+        "gbm_har_rv": {
+          "samples": 20,
+          "coverage": 0.65,
+          "winkler": 3.3825801181458663,
+          "baseline_winkler": 3.6529981895851895,
+          "mase_vs_naive": 1.006932668038874,
+          "pinball": [
+            {
+              "quantile": 0.09999999999999998,
+              "loss": 0.12842107145396361,
+              "n_samples": 20
+            },
+            {
+              "quantile": 0.5,
+              "loss": 0.36023016199090707,
+              "n_samples": 20
+            },
+            {
+              "quantile": 0.9,
+              "loss": 0.209836940360623,
+              "n_samples": 20
+            }
+          ],
+          "dm_vs_shared": {
+            "dm_statistic": -1.2017382125462075,
+            "p_value": 0.11473248553596282,
+            "alternative": "less",
+            "h": 1,
+            "loss_function": "relative_winkler",
+            "reject_null": false
+          },
+          "conditional_coverage": {
+            "overall": 0.65
+          },
+          "event_samples": {
+            "large_overnight_gap": 0
+          },
+          "event_evidence_complete": false,
+          "options_benchmark": null,
+          "existing_gates": {
+            "timestamp": "2026-10-09T05:22:08.842261+00:00",
+            "tiers_total": 2,
+            "tiers_passed": 0,
+            "overall_passed": false,
+            "tier_results": {
+              "T2": {
+                "passed": false,
+                "checks": {
+                  "min_forecasts": false,
+                  "coverage": false,
+                  "mase": false,
+                  "winkler": true,
+                  "diebold_mariano": false,
+                  "conditional_coverage": true,
+                  "pinball": true
+                },
+                "reason": "Tier T2: FAILED checks: min_forecasts, coverage, mase, diebold_mariano"
+              },
+              "overall": {
+                "passed": false,
+                "checks": {
+                  "min_forecasts": false,
+                  "coverage": false,
+                  "mase": false,
+                  "winkler": true,
+                  "diebold_mariano": false,
+                  "conditional_coverage": true,
+                  "pinball": true
+                },
+                "reason": "Tier overall: FAILED checks: min_forecasts, coverage, mase, diebold_mariano"
+              }
+            }
+          },
+          "eligible_for_promotion_review": false,
+          "dm_vs_specialist_gbm": {
+            "dm_statistic": -0.9104382580831212,
+            "p_value": 0.1812957145207571,
+            "alternative": "less",
+            "h": 1,
+            "loss_function": "relative_winkler",
+            "reject_null": false
+          },
+          "adds_value_over_gbm": false
+        }
+      },
+      "registry_artifacts": [
+        {
+          "run_id": "7c9e6a51cef0413697f50e9bddf4a2d7",
+          "model_uri": "models:/m-77dff4ea4233487380d41103caa935cc",
+          "registered_model": "stockpilot-next-day-INDIA-VIX-gbm-q0.10-base",
+          "version": "4",
+          "scope": "research_only"
+        },
+        {
+          "run_id": "3ee99096aa6140d9836521e06f0c49f2",
+          "model_uri": "models:/m-abc73b46a7f246ada8817bdd7708ade4",
+          "registered_model": "stockpilot-next-day-INDIA-VIX-gbm-q0.50-base",
+          "version": "4",
+          "scope": "research_only"
+        },
+        {
+          "run_id": "c9262ea44b08440a89939019fc318d66",
+          "model_uri": "models:/m-36b88135138f46a88cd205e3cd3abf19",
+          "registered_model": "stockpilot-next-day-INDIA-VIX-gbm-q0.90-base",
+          "version": "4",
+          "scope": "research_only"
+        }
+      ],
+      "published": false,
+      "promotion": "Research report only; signed production receipt and independent promotion review required",
+      "provenance": {
+        "provider": "upstox",
+        "sha256": "6f6ebe5621800a074609ca5a4131ed00aa3df998b8139a69368ea4e2a0d0b11f",
+        "adjustment_status": "verified"
+      }
+    },
+    {
+      "version": "next-day-quantile-v2",
+      "symbol": "NIFTY 50",
+      "horizon_sessions": 1,
+      "timeframe": "1D",
+      "tier": "T2",
+      "evidence_grade": "C",
+      "split": {
+        "train": 174,
+        "calibration": 19,
+        "test": 20,
+        "purge_sessions": 1
+      },
+      "train_end": "2026-08-07 10:00:00+00:00",
+      "calibration_start": "2026-08-11 10:00:00+00:00",
+      "calibration_end": "2026-09-04 10:00:00+00:00",
+      "test_start": "2026-09-08 10:00:00+00:00",
+      "test_end": "2026-10-07 10:00:00+00:00",
+      "signals": [
+        "return_1",
+        "return_3",
+        "gap_last",
+        "gap_mean_20",
+        "gap_std_20",
+        "range_1",
+        "rv_1",
+        "range_2",
+        "rv_2",
+        "range_3",
+        "rv_3",
+        "rv_5",
+        "rv_22",
+        "intraday_return",
+        "close_location",
+        "volume_ratio",
+        "volume_ratio_available",
+        "close_location_available"
+      ],
+      "sequence_candidate": "not_requested",
+      "candidates": {
+        "gbm": {
+          "samples": 20,
+          "coverage": 0.7,
+          "winkler": 711.9470142958995,
+          "baseline_winkler": 734.3761650384452,
+          "mase_vs_naive": 1.013207409076857,
+          "pinball": [
+            {
+              "quantile": 0.09999999999999998,
+              "loss": 40.37992264439492,
+              "n_samples": 20
+            },
+            {
+              "quantile": 0.5,
+              "loss": 80.70197013297157,
+              "n_samples": 20
+            },
+            {
+              "quantile": 0.9,
+              "loss": 30.814778785195024,
+              "n_samples": 20
+            }
+          ],
+          "dm_vs_shared": {
+            "dm_statistic": -0.6591998591307331,
+            "p_value": 0.254883718689034,
+            "alternative": "less",
+            "h": 1,
+            "loss_function": "relative_winkler",
+            "reject_null": false
+          },
+          "conditional_coverage": {
+            "overall": 0.7
+          },
+          "event_samples": {
+            "large_overnight_gap": 0
+          },
+          "event_evidence_complete": false,
+          "options_benchmark": null,
+          "existing_gates": {
+            "timestamp": "2026-10-09T05:22:11.665783+00:00",
+            "tiers_total": 2,
+            "tiers_passed": 0,
+            "overall_passed": false,
+            "tier_results": {
+              "T2": {
+                "passed": false,
+                "checks": {
+                  "min_forecasts": false,
+                  "coverage": false,
+                  "mase": false,
+                  "winkler": true,
+                  "diebold_mariano": false,
+                  "conditional_coverage": true,
+                  "pinball": true
+                },
+                "reason": "Tier T2: FAILED checks: min_forecasts, coverage, mase, diebold_mariano"
+              },
+              "overall": {
+                "passed": false,
+                "checks": {
+                  "min_forecasts": false,
+                  "coverage": false,
+                  "mase": false,
+                  "winkler": true,
+                  "diebold_mariano": false,
+                  "conditional_coverage": true,
+                  "pinball": true
+                },
+                "reason": "Tier overall: FAILED checks: min_forecasts, coverage, mase, diebold_mariano"
+              }
+            }
+          },
+          "eligible_for_promotion_review": false
+        },
+        "gbm_har_rv": {
+          "samples": 20,
+          "coverage": 0.75,
+          "winkler": 707.8593515296463,
+          "baseline_winkler": 734.3761650384452,
+          "mase_vs_naive": 1.013207409076857,
+          "pinball": [
+            {
+              "quantile": 0.09999999999999998,
+              "loss": 39.971156367769595,
+              "n_samples": 20
+            },
+            {
+              "quantile": 0.5,
+              "loss": 80.70197013297157,
+              "n_samples": 20
+            },
+            {
+              "quantile": 0.9,
+              "loss": 30.814778785195024,
+              "n_samples": 20
+            }
+          ],
+          "dm_vs_shared": {
+            "dm_statistic": -0.7567515217320988,
+            "p_value": 0.22459937070483044,
+            "alternative": "less",
+            "h": 1,
+            "loss_function": "relative_winkler",
+            "reject_null": false
+          },
+          "conditional_coverage": {
+            "overall": 0.75
+          },
+          "event_samples": {
+            "large_overnight_gap": 0
+          },
+          "event_evidence_complete": false,
+          "options_benchmark": null,
+          "existing_gates": {
+            "timestamp": "2026-10-09T05:22:11.665783+00:00",
+            "tiers_total": 2,
+            "tiers_passed": 0,
+            "overall_passed": false,
+            "tier_results": {
+              "T2": {
+                "passed": false,
+                "checks": {
+                  "min_forecasts": false,
+                  "coverage": false,
+                  "mase": false,
+                  "winkler": true,
+                  "diebold_mariano": false,
+                  "conditional_coverage": true,
+                  "pinball": true
+                },
+                "reason": "Tier T2: FAILED checks: min_forecasts, coverage, mase, diebold_mariano"
+              },
+              "overall": {
+                "passed": false,
+                "checks": {
+                  "min_forecasts": false,
+                  "coverage": false,
+                  "mase": false,
+                  "winkler": true,
+                  "diebold_mariano": false,
+                  "conditional_coverage": true,
+                  "pinball": true
+                },
+                "reason": "Tier overall: FAILED checks: min_forecasts, coverage, mase, diebold_mariano"
+              }
+            }
+          },
+          "eligible_for_promotion_review": false,
+          "dm_vs_specialist_gbm": {
+            "dm_statistic": -1.0892409587008762,
+            "p_value": 0.13802382062149438,
+            "alternative": "less",
+            "h": 1,
+            "loss_function": "relative_winkler",
+            "reject_null": false
+          },
+          "adds_value_over_gbm": false
+        }
+      },
+      "registry_artifacts": [
+        {
+          "run_id": "2fe02d9a7b524774be81191e1ac63952",
+          "model_uri": "models:/m-3def22967040498f8cf3bd92200f4246",
+          "registered_model": "stockpilot-next-day-NIFTY-50-gbm-q0.10-base",
+          "version": "4",
+          "scope": "research_only"
+        },
+        {
+          "run_id": "3aec74d01dd3499bbf24c4f938d08653",
+          "model_uri": "models:/m-1e571714e0d4414eae91b185db2b7ff7",
+          "registered_model": "stockpilot-next-day-NIFTY-50-gbm-q0.50-base",
+          "version": "4",
+          "scope": "research_only"
+        },
+        {
+          "run_id": "8bd98877e9164e61afd238e24aca8a3d",
+          "model_uri": "models:/m-3a713e3800aa4cd0ab0eef70e3118ab9",
+          "registered_model": "stockpilot-next-day-NIFTY-50-gbm-q0.90-base",
+          "version": "4",
+          "scope": "research_only"
+        }
+      ],
+      "published": false,
+      "promotion": "Research report only; signed production receipt and independent promotion review required",
+      "provenance": {
+        "provider": "upstox",
+        "sha256": "a38786e44ca1b8afcf029715c7d251c85a51a3f926fac048b99030eb80a4b25b",
+        "adjustment_status": "verified"
+      }
+    }
+  ],
+  "scope": "Per-symbol paired held-out reports; no cross-universe promotion inferred from a single symbol."
+}

@@ -1,0 +1,560 @@
+{
+  "source": "C:\\Users\\khush\\OneDrive\\Desktop\\stock\\StockPilot-AI-v18\\database\\stockpilot.db",
+  "mode": "inventory-only",
+  "integrity_ok": true,
+  "foreign_key_violations": 0,
+  "tables": {
+    "admin_audit_log": {
+      "rows": 0,
+      "columns": [
+        "id",
+        "actor_user_id",
+        "actor_email",
+        "action",
+        "target",
+        "outcome",
+        "detail",
+        "created_at"
+      ]
+    },
+    "audit_log": {
+      "rows": 104,
+      "columns": [
+        "id",
+        "user_id",
+        "action",
+        "entity_type",
+        "entity_id",
+        "details_json",
+        "created_at"
+      ]
+    },
+    "auth_login_attempts": {
+      "rows": 0,
+      "columns": [
+        "identifier",
+        "failed_count",
+        "window_started",
+        "locked_until",
+        "updated_at"
+      ]
+    },
+    "auth_sessions": {
+      "rows": 112,
+      "columns": [
+        "id",
+        "user_id",
+        "jti_hash",
+        "token_version",
+        "issued_at",
+        "expires_at",
+        "revoked_at",
+        "device_label"
+      ]
+    },
+    "chart_drawings": {
+      "rows": 0,
+      "columns": [
+        "id",
+        "user_id",
+        "symbol",
+        "drawing_type",
+        "payload_json",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "chart_preferences": {
+      "rows": 0,
+      "columns": [
+        "user_id",
+        "symbol",
+        "layout_json",
+        "updated_at"
+      ]
+    },
+    "feature_flag_state": {
+      "rows": 0,
+      "columns": [
+        "name",
+        "enabled",
+        "rollout_percent",
+        "updated_by",
+        "updated_at",
+        "reason",
+        "auto_rolled_back_at",
+        "auto_rollback_detail"
+      ]
+    },
+    "forecast_kill_switches": {
+      "rows": 0,
+      "columns": [
+        "id",
+        "scope",
+        "target",
+        "reason",
+        "created_by",
+        "created_at",
+        "expires_at",
+        "revoked_at",
+        "revoked_by",
+        "revoke_reason"
+      ]
+    },
+    "forward_test_events": {
+      "rows": 0,
+      "columns": [
+        "id",
+        "forward_test_id",
+        "symbol",
+        "bar_at",
+        "action",
+        "price",
+        "reason",
+        "recorded_at"
+      ]
+    },
+    "forward_tests": {
+      "rows": 0,
+      "columns": [
+        "id",
+        "user_id",
+        "strategy_id",
+        "name",
+        "symbols",
+        "status",
+        "started_at",
+        "stopped_at",
+        "last_evaluated_at"
+      ]
+    },
+    "login_anomalies": {
+      "rows": 12,
+      "columns": [
+        "id",
+        "user_id",
+        "anomaly_type",
+        "severity",
+        "detail",
+        "ip_prefix",
+        "created_at",
+        "acknowledged_at"
+      ]
+    },
+    "login_devices": {
+      "rows": 12,
+      "columns": [
+        "id",
+        "user_id",
+        "device_hash",
+        "device_label",
+        "ip_prefix",
+        "lat",
+        "lon",
+        "first_seen",
+        "last_seen",
+        "seen_count",
+        "confirmed_at"
+      ]
+    },
+    "mfa_challenges": {
+      "rows": 0,
+      "columns": [
+        "id",
+        "user_id",
+        "jti_hash",
+        "expires_at",
+        "failed_attempts",
+        "consumed_at",
+        "created_at"
+      ]
+    },
+    "mfa_recovery_codes": {
+      "rows": 0,
+      "columns": [
+        "id",
+        "user_id",
+        "code_hash",
+        "used_at",
+        "created_at"
+      ]
+    },
+    "model_health": {
+      "rows": 0,
+      "columns": [
+        "id",
+        "symbol",
+        "timeframe",
+        "horizon",
+        "settled_samples",
+        "rolling_coverage",
+        "nominal_coverage",
+        "coverage_gap",
+        "mase",
+        "directional_accuracy",
+        "naive_directional_accuracy",
+        "model_mae",
+        "naive_mae",
+        "drift_detected",
+        "drift_reasons_json",
+        "severity",
+        "action_taken",
+        "evaluated_at"
+      ]
+    },
+    "oauth_identities": {
+      "rows": 1,
+      "columns": [
+        "id",
+        "user_id",
+        "provider",
+        "provider_subject",
+        "verified_email",
+        "created_at",
+        "last_login_at"
+      ]
+    },
+    "paper_accounts": {
+      "rows": 12,
+      "columns": [
+        "user_id",
+        "initial_balance",
+        "cash_balance",
+        "leaderboard_opt_in",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "paper_badges": {
+      "rows": 12,
+      "columns": [
+        "id",
+        "user_id",
+        "badge_key",
+        "title",
+        "earned_at"
+      ]
+    },
+    "paper_challenge_entries": {
+      "rows": 0,
+      "columns": [
+        "id",
+        "user_id",
+        "challenge_key",
+        "choice",
+        "score",
+        "created_at"
+      ]
+    },
+    "paper_orders": {
+      "rows": 13,
+      "columns": [
+        "id",
+        "user_id",
+        "symbol",
+        "side",
+        "quantity",
+        "price",
+        "notional",
+        "status",
+        "created_at",
+        "order_type",
+        "limit_price",
+        "stop_price",
+        "trail_amount",
+        "spread_bps",
+        "slippage_bps",
+        "reasoning_notes",
+        "linked_alert_id",
+        "updated_at",
+        "filled_at",
+        "cancelled_at",
+        "instrument_type",
+        "expiry",
+        "strike",
+        "option_type",
+        "margin_required",
+        "realized_pnl",
+        "target_price",
+        "parent_order_id",
+        "oco_group",
+        "lot_size"
+      ]
+    },
+    "paper_positions": {
+      "rows": 11,
+      "columns": [
+        "id",
+        "user_id",
+        "symbol",
+        "quantity",
+        "average_price",
+        "updated_at",
+        "lot_size"
+      ]
+    },
+    "paper_trade_journal": {
+      "rows": 13,
+      "columns": [
+        "id",
+        "user_id",
+        "order_id",
+        "event_type",
+        "notes",
+        "payload_json",
+        "created_at"
+      ]
+    },
+    "password_reset_tokens": {
+      "rows": 0,
+      "columns": [
+        "id",
+        "user_id",
+        "token_hash",
+        "expires_at",
+        "used_at",
+        "created_at"
+      ]
+    },
+    "portfolio": {
+      "rows": 0,
+      "columns": [
+        "id",
+        "user_id",
+        "symbol",
+        "company",
+        "shares",
+        "buy_price",
+        "buy_date"
+      ]
+    },
+    "prediction_history": {
+      "rows": 0,
+      "columns": [
+        "id",
+        "user_id",
+        "symbol",
+        "linear_prediction",
+        "decision_tree_prediction",
+        "random_forest_prediction",
+        "prediction_date",
+        "consensus_prediction",
+        "best_model",
+        "model_version",
+        "payload_json",
+        "forecast_low",
+        "forecast_median",
+        "forecast_high",
+        "confidence_level",
+        "actual_price",
+        "coverage_hit",
+        "winkler_score",
+        "training_window",
+        "timeframe",
+        "created_at",
+        "origin_timestamp",
+        "target_timestamp",
+        "provider",
+        "data_timestamp",
+        "feature_timestamp",
+        "data_version",
+        "schema_version",
+        "forecast_evidence_json",
+        "forecast_status",
+        "snapshot_hash",
+        "outcome_status",
+        "outcome_evidence_json",
+        "settlement_source",
+        "settlement_provider",
+        "settlement_data_timestamp",
+        "settlement_is_stale",
+        "settlement_is_demo",
+        "official_outcome",
+        "settled_at",
+        "result_hash",
+        "horizon",
+        "horizon_sessions"
+      ]
+    },
+    "price_alerts": {
+      "rows": 0,
+      "columns": [
+        "id",
+        "user_id",
+        "symbol",
+        "condition",
+        "threshold",
+        "training_window",
+        "confidence_level",
+        "is_active",
+        "created_at",
+        "last_triggered_at",
+        "email_enabled",
+        "last_email_at"
+      ]
+    },
+    "saved_chart_layouts": {
+      "rows": 0,
+      "columns": [
+        "id",
+        "user_id",
+        "name",
+        "symbol",
+        "timeframe",
+        "overlays_json",
+        "visible_range_json",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "screener_saved_screens": {
+      "rows": 0,
+      "columns": [
+        "id",
+        "user_id",
+        "name",
+        "filters",
+        "sort_field",
+        "sort_descending",
+        "symbols",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "sentiment_snapshots": {
+      "rows": 0,
+      "columns": [
+        "id",
+        "symbol",
+        "snapshot_at",
+        "avg_score",
+        "headline_count",
+        "scored_count",
+        "source"
+      ]
+    },
+    "settings": {
+      "rows": 98,
+      "columns": [
+        "id",
+        "user_id",
+        "theme",
+        "currency",
+        "default_period"
+      ]
+    },
+    "status_banners": {
+      "rows": 0,
+      "columns": [
+        "id",
+        "level",
+        "headline",
+        "body",
+        "starts_at",
+        "ends_at",
+        "published",
+        "created_by",
+        "created_at",
+        "published_by",
+        "published_at",
+        "withdrawn_at"
+      ]
+    },
+    "strategy_definitions": {
+      "rows": 0,
+      "columns": [
+        "id",
+        "user_id",
+        "name",
+        "definition",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "symbols": {
+      "rows": 0,
+      "columns": [
+        "id",
+        "name",
+        "symbol",
+        "exchange",
+        "country",
+        "sector"
+      ]
+    },
+    "transactions": {
+      "rows": 0,
+      "columns": [
+        "id",
+        "user_id",
+        "symbol",
+        "transaction_type",
+        "shares",
+        "price",
+        "transaction_date"
+      ]
+    },
+    "user_mfa": {
+      "rows": 1,
+      "columns": [
+        "user_id",
+        "encrypted_totp_secret",
+        "enabled",
+        "last_totp_counter",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "user_workspace_layouts": {
+      "rows": 0,
+      "columns": [
+        "user_id",
+        "workspace",
+        "layout_json",
+        "updated_at"
+      ]
+    },
+    "users": {
+      "rows": 98,
+      "columns": [
+        "id",
+        "name",
+        "email",
+        "password",
+        "created_at",
+        "auth_provider",
+        "google_id",
+        "last_login_at",
+        "role",
+        "token_version",
+        "date_of_birth",
+        "account_status"
+      ]
+    },
+    "watchlist": {
+      "rows": 0,
+      "columns": [
+        "id",
+        "user_id",
+        "symbol",
+        "added_date"
+      ]
+    },
+    "webauthn_credentials": {
+      "rows": 0,
+      "columns": [
+        "id",
+        "user_id",
+        "credential_id",
+        "public_key",
+        "sign_count",
+        "transports",
+        "label",
+        "created_at",
+        "last_used_at"
+      ]
+    }
+  },
+  "unmapped_tables": [],
+  "production_cutover": false
+}

@@ -1,6 +1,7 @@
 """Router for the auth domain (extracted from api/main.py)."""
 
 from fastapi import APIRouter
+from api.device_policy import observe_login_device as _observe_login_device, set_device_cookie as _set_device_cookie, enforce_device_policy as _enforce_device_policy
 from api.deps import *  # noqa: F401,F403
 from services.admin_registry import effective_role
 from database import delete_user_data, record_audit_event
@@ -60,6 +61,9 @@ def _clear_mfa_challenge_cookie(response: Response, request: Request) -> None:
 
 @router.post("/api/v1/auth/register")
 def register_endpoint(payload: Registration, response: Response, request: Request) -> dict[str, Any]:
+    from services.login_anomaly import strict_mode
+    if strict_mode():
+        raise HTTPException(status_code=403, detail="Strict device policy requires administrator-provisioned accounts with enrolled MFA.")
     ok, result = register(payload.name, payload.email, payload.password, payload.date_of_birth)
     if not ok or not isinstance(result, dict):
         raise HTTPException(status_code=400, detail=str(result))
@@ -72,22 +76,14 @@ def login_endpoint(payload: Credentials, response: Response, request: Request) -
     ok, result = authenticate(payload.email, payload.password)
     if not ok or not isinstance(result, dict):
         raise HTTPException(status_code=401, detail=str(result))
-    # Login anomaly detection (new-device / impossible-travel) — best-effort,
-    # never blocks authentication; results are surfaced on the response.
-    try:
-        from services.login_anomaly import record_login, strict_mode
-        client_ip = request.client.host if request.client else None
-        anomaly = record_login(
-            int(result["id"]),
-            user_agent=request.headers.get("user-agent", ""),
-            ip=client_ip,
-        )
-    except Exception:
-        anomaly = {"new_device": False, "impossible_travel": False, "anomalies": []}
+    token, anomaly = _observe_login_device(result, request)
     if mfa_status(int(result["id"]))["enabled"]:
-        challenge = issue_mfa_challenge(result, next_path=payload.next)
+        challenge = issue_mfa_challenge(result, next_path=payload.next, device_hash=anomaly.get("device_hash"))
         _set_mfa_challenge_cookie(response, request, challenge)
+        _set_device_cookie(response, request, token)
         return {"mfa_required": True, "anomalies": anomaly["anomalies"]}
+    _enforce_device_policy(result, anomaly)
+    _set_device_cookie(response, request, token)
     _set_session_cookie(response, request, create_access_token(result, request=request))
     return {"user": result, "anomalies": anomaly["anomalies"]}
 
@@ -102,7 +98,9 @@ def mfa_verify_endpoint(
     if not challenge:
         raise HTTPException(status_code=401, detail="The verification challenge is invalid or expired.")
     try:
-        user, next_path, method = complete_mfa_challenge(challenge, payload.code)
+        from services.login_anomaly import DEVICE_COOKIE, token_device_hash
+        user, next_path, method = complete_mfa_challenge(challenge, payload.code,
+            device_hash=token_device_hash(request.cookies.get(DEVICE_COOKIE, "")))
     except ValueError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     _set_session_cookie(response, request, create_access_token(user, request=request))
@@ -325,15 +323,19 @@ def google_oauth_callback(
         target = transaction.next_path
         if action == "created":
             target = "/onboarding?" + urlencode({"next": transaction.next_path})
+        device, anomaly = _observe_login_device(user, request)
         if mfa_status(int(user["id"]))["enabled"]:
-            challenge = issue_mfa_challenge(user, next_path=target)
+            challenge = issue_mfa_challenge(user, next_path=target, device_hash=anomaly.get("device_hash"))
             response = RedirectResponse(
                 url="/login?" + urlencode({"next": target, "mfa": "required"}),
                 status_code=303,
             )
             _set_mfa_challenge_cookie(response, request, challenge)
+            _set_device_cookie(response, request, device)
         else:
+            _enforce_device_policy(user, anomaly)
             response = RedirectResponse(url=target, status_code=303)
+            _set_device_cookie(response, request, device)
             _set_session_cookie(response, request, create_access_token(user, request=request))
         _clear_oauth_state_cookie(response, request, provider="google")
         return response

@@ -34,6 +34,24 @@ interface ScorecardData {
   conditional_coverage: Record<string, number>;
   promotion_gates: Record<string, { passed: boolean; coverage_within_tolerance: boolean; mase_not_worse_than_naive: boolean }>;
   model_actions: { auto_widened: number; retired: number };
+  next_day?: NextDayEvidence;
+}
+
+export type NextDayEvidence = { total_forecasts: number; evidence_tier: string; coverage: number | null; target_coverage: number | null; winkler_score: number | null; mase: number | null; mean_pinball_loss: number | null; data_tiers: Record<string, number>; specialist_status: string; basis: string };
+
+export function NextDayScorecard({ evidence }: { evidence: NextDayEvidence }) {
+  return <section aria-label="Next-day forecast evidence" className="rounded-lg border bg-muted/30 p-4">
+    <h2 className="text-lg font-semibold">Next-day forecast · own track record</h2>
+    <p className="mt-1 text-xs text-muted-foreground">Daily horizon=1 only · {evidence.total_forecasts} settled forecasts · {evidence.evidence_tier} evidence</p>
+    <dl className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div><dt className="text-xs text-muted-foreground">Coverage / nominal</dt><dd className="font-mono">{evidence.coverage == null ? "N/A" : `${(evidence.coverage * 100).toFixed(1)}%`} / {evidence.target_coverage == null ? "N/A" : `${(evidence.target_coverage * 100).toFixed(1)}%`}</dd></div>
+      <div><dt className="text-xs text-muted-foreground">Winkler score</dt><dd className="font-mono">{evidence.winkler_score?.toFixed(4) ?? "N/A"}</dd></div>
+      <div><dt className="text-xs text-muted-foreground">MASE vs persistence</dt><dd className="font-mono">{evidence.mase?.toFixed(4) ?? "N/A"}</dd></div>
+      <div><dt className="text-xs text-muted-foreground">Mean pinball loss</dt><dd className="font-mono">{evidence.mean_pinball_loss?.toFixed(4) ?? "N/A"}</dd></div>
+    </dl>
+    <p className="mt-3 text-xs text-muted-foreground">Data tiers: {Object.entries(evidence.data_tiers).map(([tier, count]) => `${tier}: ${count}`).join(" · ") || "No settled evidence"}. Specialist: {evidence.specialist_status.replaceAll("_", " ")}.</p>
+    <p className="mt-1 text-xs text-muted-foreground">{evidence.basis}</p>
+  </section>;
 }
 
 export function PublicScorecard() {
@@ -137,6 +155,7 @@ export function PublicScorecard() {
       </div>
 
       {/* Overall Summary */}
+      {data.next_day && <NextDayScorecard evidence={data.next_day} />}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard
           label="Total Forecasts"

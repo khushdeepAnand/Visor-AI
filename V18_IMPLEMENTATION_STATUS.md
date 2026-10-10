@@ -1,5 +1,60 @@
 # StockPilot AI v18 RC — implementation and verification status
 
+## Supabase integration checkpoint — 2026-10-10
+
+This request is **not yet complete**. `docs/SUPABASE_INTEGRATION_STATUS.md`
+records the real local PostgreSQL DAO/schema/RLS/concurrency/transfer evidence,
+initial runtime helper adoption, read-only actual-source inventory, Windows
+instructions and remaining blockers. SQLite remains permanent/default. URLs
+alone cannot select PostgreSQL; incomplete PG runtime access refuses the main
+SQLite file rather than silently falling back. There has been no production
+data transfer or traffic cutover. Keep application startup on SQLite pending
+remaining auth/trading/job adoption and both-backend release verification.
+
+## v20 → v21 continuation — 2026-10-09
+
+The requested Windows archive name remains v18. This continuation is **partial**;
+it does not assert completion of every standing item. Detailed current evidence
+and limitations are in `docs/V21_CONTINUATION_STATUS.md`.
+
+- A row-level history manifest now inventories all 18 cache files, explicitly
+  tags demo/unknown/unreviewed rows, checks corporate actions through the existing
+  forecasting module and exports 476 unique completed real index sessions.
+- Real next-day T2 evaluation executed: 20 paired test outcomes per index; neither
+  GBM nor HAR passes promotion. No statistically supported win is claimed and
+  no signed production receipt or production routing change was made.
+- Pandera price validation runs in the provider pipeline and evaluator. MLflow
+  stores actual research estimators; all 24 local registered versions reloaded
+  and produced finite smoke predictions, without deployment aliases.
+- Canonical forecast snapshot values are shared by SQLite/Postgres writers;
+  SQLite writes use the owning connection and return the correct inserted IDs.
+  A real disposable SQLite load preserved 400 writes with 16 threads. Full
+  repository adoption, live Postgres execution and production-shape load remain open.
+- Login MFA/recovery/passkey success can confirm possession of a random HttpOnly
+  device cookie. Alert acknowledgment cannot confer trust. Strict-mode detection
+  failures fail closed. Field-bound AES-GCM helpers are tested, but application-wide
+  PII persistence/query migration and field-key rotation are **not complete**.
+- The legacy database-encryption entry point now reuses the existing
+  preservation-verified exporter instead of duplicating unsafe table-copy logic;
+  encrypted rollback, quoted schema/passphrase preservation and wrong-key
+  rejection were executed against disposable real databases.
+- External penetration testing is **not booked**. A concrete engagement request
+  exists in `docs/EXTERNAL_PEN_TEST_ENGAGEMENT.md`; vendor/contact, budget and
+  staging URL are required from the owner. Docker CLI remains unavailable.
+
+Executed: final strict full backend **1,146 passed / 3 skipped**, including
+merged-cache continuity and encryption compatibility regressions. An additional
+index/issuer identity guard is covered by the final focused manifest run.
+Frontend verification **194 tests**, schema/honesty/type/build/audit passed;
+production-browser suite **20 passed**, including actual virtual passkey sign-in.
+Whole-project mypy **195 source files** passed; Bandit Medium/High,
+dependency audit, document/reference and non-connecting parity gates passed.
+The detailed status records the exact verification/delivery scope.
+
+The prepare-only SQLite source-byte freeze is explicitly superseded by this
+user-authorized adoption work; its URL-selection result/SQL/database-byte parity
+checks remain, supplemented by canonical snapshot and bound-connection tests.
+
 ## Resumed Supabase-readiness verification — 2026-10-07
 
 This resumption completes the supplied **prepare-only Supabase-readiness prompt**,

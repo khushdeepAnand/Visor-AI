@@ -1,0 +1,174 @@
+{
+  "status": "passed_real_local_registry_reload",
+  "models": [
+    {
+      "name": "stockpilot-next-day-INDIA-VIX-gbm-q0.10-base",
+      "version": 4,
+      "run_id": "7c9e6a51cef0413697f50e9bddf4a2d7",
+      "input_manifest_sha256": "c8402fba1c9a9bba1c0fa1c8a1faed329344722b130c11c8f1b434bcc9f48bb5",
+      "reload_inference": "passed"
+    },
+    {
+      "name": "stockpilot-next-day-INDIA-VIX-gbm-q0.10-base",
+      "version": 3,
+      "run_id": "b4f0789dec6640eb8f0211f10651c8a5",
+      "input_manifest_sha256": "89f71d64e948ac26203e528d05e7c03ab91b688aee3e03ce6d3a4db32a73f5c5",
+      "reload_inference": "passed"
+    },
+    {
+      "name": "stockpilot-next-day-INDIA-VIX-gbm-q0.10-base",
+      "version": 2,
+      "run_id": "2d47372710174dc9895bf0ff2ae7d70b",
+      "input_manifest_sha256": "84505b6a523e2dbcc941389ec7751a8260a65bd62b1850f16d3e486366e78009",
+      "reload_inference": "passed"
+    },
+    {
+      "name": "stockpilot-next-day-INDIA-VIX-gbm-q0.10-base",
+      "version": 1,
+      "run_id": "549a01b82c57426a9e9c18a8d58d2b1b",
+      "input_manifest_sha256": "ab29f4c52de8a35b751dd975576bad9f3a7812aba2f661343ff346f1dc9dc959",
+      "reload_inference": "passed"
+    },
+    {
+      "name": "stockpilot-next-day-INDIA-VIX-gbm-q0.50-base",
+      "version": 4,
+      "run_id": "3ee99096aa6140d9836521e06f0c49f2",
+      "input_manifest_sha256": "c8402fba1c9a9bba1c0fa1c8a1faed329344722b130c11c8f1b434bcc9f48bb5",
+      "reload_inference": "passed"
+    },
+    {
+      "name": "stockpilot-next-day-INDIA-VIX-gbm-q0.50-base",
+      "version": 3,
+      "run_id": "01aa86411f214e11bdc461af80b7f2fd",
+      "input_manifest_sha256": "89f71d64e948ac26203e528d05e7c03ab91b688aee3e03ce6d3a4db32a73f5c5",
+      "reload_inference": "passed"
+    },
+    {
+      "name": "stockpilot-next-day-INDIA-VIX-gbm-q0.50-base",
+      "version": 2,
+      "run_id": "235a6bd237d74b1aacad8dbe3406325d",
+      "input_manifest_sha256": "84505b6a523e2dbcc941389ec7751a8260a65bd62b1850f16d3e486366e78009",
+      "reload_inference": "passed"
+    },
+    {
+      "name": "stockpilot-next-day-INDIA-VIX-gbm-q0.50-base",
+      "version": 1,
+      "run_id": "b960d3ff6ae64fbc9055272c9db4a35d",
+      "input_manifest_sha256": "ab29f4c52de8a35b751dd975576bad9f3a7812aba2f661343ff346f1dc9dc959",
+      "reload_inference": "passed"
+    },
+    {
+      "name": "stockpilot-next-day-INDIA-VIX-gbm-q0.90-base",
+      "version": 4,
+      "run_id": "c9262ea44b08440a89939019fc318d66",
+      "input_manifest_sha256": "c8402fba1c9a9bba1c0fa1c8a1faed329344722b130c11c8f1b434bcc9f48bb5",
+      "reload_inference": "passed"
+    },
+    {
+      "name": "stockpilot-next-day-INDIA-VIX-gbm-q0.90-base",
+      "version": 3,
+      "run_id": "e7292288393b43c793c870a0e981b469",
+      "input_manifest_sha256": "89f71d64e948ac26203e528d05e7c03ab91b688aee3e03ce6d3a4db32a73f5c5",
+      "reload_inference": "passed"
+    },
+    {
+      "name": "stockpilot-next-day-INDIA-VIX-gbm-q0.90-base",
+      "version": 2,
+      "run_id": "002402ebb7eb4be9ab4dfe882a591d2b",
+      "input_manifest_sha256": "84505b6a523e2dbcc941389ec7751a8260a65bd62b1850f16d3e486366e78009",
+      "reload_inference": "passed"
+    },
+    {
+      "name": "stockpilot-next-day-INDIA-VIX-gbm-q0.90-base",
+      "version": 1,
+      "run_id": "c81a437be26440699d66ed713a459c17",
+      "input_manifest_sha256": "ab29f4c52de8a35b751dd975576bad9f3a7812aba2f661343ff346f1dc9dc959",
+      "reload_inference": "passed"
+    },
+    {
+      "name": "stockpilot-next-day-NIFTY-50-gbm-q0.10-base",
+      "version": 4,
+      "run_id": "2fe02d9a7b524774be81191e1ac63952",
+      "input_manifest_sha256": "c8402fba1c9a9bba1c0fa1c8a1faed329344722b130c11c8f1b434bcc9f48bb5",
+      "reload_inference": "passed"
+    },
+    {
+      "name": "stockpilot-next-day-NIFTY-50-gbm-q0.10-base",
+      "version": 3,
+      "run_id": "6422a0a1ed5e403389f479af87e19d65",
+      "input_manifest_sha256": "89f71d64e948ac26203e528d05e7c03ab91b688aee3e03ce6d3a4db32a73f5c5",
+      "reload_inference": "passed"
+    },
+    {
+      "name": "stockpilot-next-day-NIFTY-50-gbm-q0.10-base",
+      "version": 2,
+      "run_id": "27db3b1673324be1a175d9f9a3750e49",
+      "input_manifest_sha256": "84505b6a523e2dbcc941389ec7751a8260a65bd62b1850f16d3e486366e78009",
+      "reload_inference": "passed"
+    },
+    {
+      "name": "stockpilot-next-day-NIFTY-50-gbm-q0.10-base",
+      "version": 1,
+      "run_id": "ca9e027b6373455a9abed49048a80fd6",
+      "input_manifest_sha256": "ab29f4c52de8a35b751dd975576bad9f3a7812aba2f661343ff346f1dc9dc959",
+      "reload_inference": "passed"
+    },
+    {
+      "name": "stockpilot-next-day-NIFTY-50-gbm-q0.50-base",
+      "version": 4,
+      "run_id": "3aec74d01dd3499bbf24c4f938d08653",
+      "input_manifest_sha256": "c8402fba1c9a9bba1c0fa1c8a1faed329344722b130c11c8f1b434bcc9f48bb5",
+      "reload_inference": "passed"
+    },
+    {
+      "name": "stockpilot-next-day-NIFTY-50-gbm-q0.50-base",
+      "version": 3,
+      "run_id": "ddee9eb870984c768642862e4ca197e1",
+      "input_manifest_sha256": "89f71d64e948ac26203e528d05e7c03ab91b688aee3e03ce6d3a4db32a73f5c5",
+      "reload_inference": "passed"
+    },
+    {
+      "name": "stockpilot-next-day-NIFTY-50-gbm-q0.50-base",
+      "version": 2,
+      "run_id": "1ed445ac71424566aeabcf00055e2a43",
+      "input_manifest_sha256": "84505b6a523e2dbcc941389ec7751a8260a65bd62b1850f16d3e486366e78009",
+      "reload_inference": "passed"
+    },
+    {
+      "name": "stockpilot-next-day-NIFTY-50-gbm-q0.50-base",
+      "version": 1,
+      "run_id": "9337ecb0f5ab46feac61f9b4b97bd0b1",
+      "input_manifest_sha256": "ab29f4c52de8a35b751dd975576bad9f3a7812aba2f661343ff346f1dc9dc959",
+      "reload_inference": "passed"
+    },
+    {
+      "name": "stockpilot-next-day-NIFTY-50-gbm-q0.90-base",
+      "version": 4,
+      "run_id": "8bd98877e9164e61afd238e24aca8a3d",
+      "input_manifest_sha256": "c8402fba1c9a9bba1c0fa1c8a1faed329344722b130c11c8f1b434bcc9f48bb5",
+      "reload_inference": "passed"
+    },
+    {
+      "name": "stockpilot-next-day-NIFTY-50-gbm-q0.90-base",
+      "version": 3,
+      "run_id": "3203e291410d4e119b469a0e83cf63ae",
+      "input_manifest_sha256": "89f71d64e948ac26203e528d05e7c03ab91b688aee3e03ce6d3a4db32a73f5c5",
+      "reload_inference": "passed"
+    },
+    {
+      "name": "stockpilot-next-day-NIFTY-50-gbm-q0.90-base",
+      "version": 2,
+      "run_id": "3683cda8651b44e2adda46447b401b6b",
+      "input_manifest_sha256": "84505b6a523e2dbcc941389ec7751a8260a65bd62b1850f16d3e486366e78009",
+      "reload_inference": "passed"
+    },
+    {
+      "name": "stockpilot-next-day-NIFTY-50-gbm-q0.90-base",
+      "version": 1,
+      "run_id": "0150e074287048a4b7f89f8815531d26",
+      "input_manifest_sha256": "ab29f4c52de8a35b751dd975576bad9f3a7812aba2f661343ff346f1dc9dc959",
+      "reload_inference": "passed"
+    }
+  ],
+  "scope": "Actual trained weights reloaded from MLflow; zero-valued inference is an artifact smoke check, not market evidence or promotion"
+}

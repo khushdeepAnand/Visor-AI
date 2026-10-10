@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import urlsplit
 
 
 def postgres_selected() -> bool:
@@ -18,10 +19,25 @@ def postgres_url(*, migration: bool = False) -> str | None:
 def migration_url(*, configured_url: str | None = None, sqlite_fallback: str) -> str:
     """An explicitly supplied Postgres migration URL wins; SQLite fallback is unchanged."""
     if configured_url and configured_url.startswith(("postgresql://", "postgresql+", "postgres://")):
-        return configured_url
+        return _direct_url(configured_url)
     if postgres_selected():
         url = postgres_url(migration=True)
         if not url:
             raise ValueError("PostgreSQL migration URL required when Postgres is selected")
-        return url
-    return os.getenv("STOCKPILOT_DATABASE_URL") or sqlite_fallback
+        return _direct_url(url)
+    return sqlite_fallback
+
+
+def _direct_url(url: str) -> str:
+    """Reject known Supavisor transaction/session endpoints for schema changes."""
+    parsed = urlsplit(url)
+    if parsed.port == 6543 or (parsed.hostname or "").endswith(".pooler.supabase.com"):
+        raise ValueError("Migrations require a direct PostgreSQL endpoint, not a Supabase pooler URL")
+    return url
+
+
+def sqlalchemy_url(url: str) -> str:
+    """Pin the installed synchronous driver across SQLAlchemy 2.0/2.1 defaults."""
+    if url.startswith(("postgresql://", "postgres://")):
+        return "postgresql+psycopg2://" + url.split("://", 1)[1]
+    return url

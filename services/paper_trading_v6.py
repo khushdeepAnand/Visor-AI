@@ -123,6 +123,7 @@ def place_order(
     timeframe: str = "1D",
 ) -> dict[str, Any]:
     ensure_schema(); ensure_account(user_id)
+    requested_symbol = str(symbol)
     user_id = int(user_id); symbol = MANAGER.normalize_symbol(symbol)
     side = str(side).upper(); order_type = str(order_type).upper(); instrument_type = str(instrument_type).upper()
     quantity = float(quantity)
@@ -136,11 +137,11 @@ def place_order(
         if stop_price is None or target_price is None or float(stop_price) <= 0 or float(target_price) <= 0:
             raise ValueError("BRACKET orders require positive stop_price and target_price.")
 
-    quote = market_quote or MANAGER.get_quote(symbol, timeframe=timeframe).to_dict()
+    quote = market_quote or MANAGER.get_quote(requested_symbol, timeframe=timeframe).to_dict()
     context = quote.get("context")
     if not isinstance(context, dict):
         context = build_market_context(
-            requested_symbol=symbol,
+            requested_symbol=requested_symbol,
             instrument=CATALOGUE.resolve(symbol),
             provider="supplied_market_quote",
             credential_mode="supplied",
