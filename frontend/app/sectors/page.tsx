@@ -104,7 +104,7 @@ export default function SectorsPage() {
               <div className="text-xs leading-relaxed text-slate-300">
                 <p className="font-medium uppercase tracking-wide text-amber-300">Partial coverage</p>
                 <p className="mt-1">
-                  {data
+                  {data?.coverage?.catalogue
                     ? `Sector metadata exists for ${data.coverage.catalogue.sector_populated} of ${data.coverage.catalogue.total} catalogue symbols (${data.coverage.catalogue.sector_populated_pct}%); the runtime broker instrument master carries no sector field.`
                     : "Sector metadata coverage is being checked."}{" "}
                   This view shows only what the stored catalogue can group, so it is not a full-universe rotation.
