@@ -23,6 +23,10 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+from services.db.base import DatabaseInterface
+from services.db.sqlite_impl import SQLiteDatabase
+from services.db.factory import get_database
+from services.db.configuration import postgres_selected
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Sequence, cast
 
@@ -418,7 +422,15 @@ class ScreenerStore:
     def __init__(self, connection_factory: ConnectionFactory | None = None) -> None:
         self._factory = connection_factory
 
-    def _connect(self) -> sqlite3.Connection:
+    def _connect(self) -> DatabaseInterface:
+        if self._factory is None and postgres_selected():
+            db = get_database()
+            try:
+                db.fetchall("SELECT id FROM screener_saved_screens LIMIT 0")
+                return db
+            except Exception:
+                db.close()
+                raise
         factory = self._factory or _default_get_connection
         if factory is None:  # pragma: no cover - only in a broken install
             raise ScreenerError("screener_storage_unavailable", "No database connection factory is available.")
@@ -440,18 +452,18 @@ class ScreenerStore:
             """
         )
         connection.commit()
-        return connection
+        return SQLiteDatabase(connection)
 
     @staticmethod
-    def _row(row: sqlite3.Row | tuple[Any, ...]) -> dict[str, Any]:
+    def _row(row: dict[str, Any]) -> dict[str, Any]:
         return {
-            "id": row[0],
-            "name": row[1],
-            "filters": json.loads(row[2]),
-            "sort": {"field": row[3], "descending": bool(row[4])},
-            "symbols": json.loads(row[5]) if row[5] else None,
-            "created_at": row[6],
-            "updated_at": row[7],
+            "id": row["id"],
+            "name": row["name"],
+            "filters": json.loads(row["filters"]),
+            "sort": {"field": row["sort_field"], "descending": bool(row["sort_descending"])},
+            "symbols": json.loads(row["symbols"]) if row["symbols"] else None,
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
         }
 
     def save_screen(
@@ -477,16 +489,17 @@ class ScreenerStore:
         stamp = datetime.now(timezone.utc).isoformat()
         connection = self._connect()
         try:
-            existing = connection.execute(
-                "SELECT COUNT(*) FROM screener_saved_screens WHERE user_id = ? AND name != ?",
+            connection.begin_write("saved-screens:" + str(int(user_id)))
+            existing = connection.fetchone(connection.sql(
+                "SELECT COUNT(*) AS n FROM screener_saved_screens WHERE user_id = ? AND name != ?"),
                 (int(user_id), label),
-            ).fetchone()
-            if existing and int(existing[0]) >= MAX_SAVED_SCREENS:
+            )
+            if existing and int(existing["n"]) >= MAX_SAVED_SCREENS:
                 raise ScreenerError(
                     "screener_saved_limit",
                     f"A maximum of {MAX_SAVED_SCREENS} saved screens per account is supported.",
                 )
-            connection.execute(
+            connection.execute(connection.sql(
                 """
                 INSERT INTO screener_saved_screens(user_id, name, filters, sort_field, sort_descending, symbols, created_at, updated_at)
                 VALUES(?, ?, ?, ?, ?, ?, ?, ?)
@@ -496,7 +509,7 @@ class ScreenerStore:
                     sort_descending = excluded.sort_descending,
                     symbols = excluded.symbols,
                     updated_at = excluded.updated_at
-                """,
+                """),
                 (
                     int(user_id),
                     label,
@@ -509,13 +522,13 @@ class ScreenerStore:
                 ),
             )
             connection.commit()
-            row = connection.execute(
+            row = connection.fetchone(connection.sql(
                 """
                 SELECT id, name, filters, sort_field, sort_descending, symbols, created_at, updated_at
                 FROM screener_saved_screens WHERE user_id = ? AND name = ?
-                """,
+                """),
                 (int(user_id), label),
-            ).fetchone()
+            )
         finally:
             connection.close()
         if row is None:  # pragma: no cover - defensive
@@ -525,13 +538,13 @@ class ScreenerStore:
     def list_screens(self, *, user_id: int) -> list[dict[str, Any]]:
         connection = self._connect()
         try:
-            rows = connection.execute(
+            rows = connection.fetchall(connection.sql(
                 """
                 SELECT id, name, filters, sort_field, sort_descending, symbols, created_at, updated_at
                 FROM screener_saved_screens WHERE user_id = ? ORDER BY updated_at DESC
-                """,
+                """),
                 (int(user_id),),
-            ).fetchall()
+            )
         finally:
             connection.close()
         return [self._row(row) for row in rows]
@@ -539,13 +552,13 @@ class ScreenerStore:
     def get_screen(self, *, user_id: int, screen_id: int) -> dict[str, Any]:
         connection = self._connect()
         try:
-            row = connection.execute(
+            row = connection.fetchone(connection.sql(
                 """
                 SELECT id, name, filters, sort_field, sort_descending, symbols, created_at, updated_at
                 FROM screener_saved_screens WHERE user_id = ? AND id = ?
-                """,
+                """),
                 (int(user_id), int(screen_id)),
-            ).fetchone()
+            )
         finally:
             connection.close()
         if row is None:
@@ -555,8 +568,8 @@ class ScreenerStore:
     def delete_screen(self, *, user_id: int, screen_id: int) -> dict[str, Any]:
         connection = self._connect()
         try:
-            cursor = connection.execute(
-                "DELETE FROM screener_saved_screens WHERE user_id = ? AND id = ?",
+            cursor = connection.execute(connection.sql(
+                "DELETE FROM screener_saved_screens WHERE user_id = ? AND id = ?"),
                 (int(user_id), int(screen_id)),
             )
             connection.commit()

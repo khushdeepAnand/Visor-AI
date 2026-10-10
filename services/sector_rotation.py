@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Callable
+from services.db.factory import get_database
+from services.db.sqlite_impl import SQLiteDatabase
 
 try:  # package layout
     from database import get_connection as _default_get_connection
@@ -38,9 +40,10 @@ def _ensure_symbols_catalogue(connection_factory: ConnectionFactory | None = Non
     factory = connection_factory or _default_get_connection
     if factory is None:
         raise RuntimeError("No database connection factory is available.")
-    connection = factory()
+    connection = SQLiteDatabase(connection_factory()) if connection_factory is not None else get_database()
     try:
-        count = int(connection.execute("SELECT COUNT(*) FROM symbols").fetchone()[0])
+        row = connection.fetchone("SELECT COUNT(*) AS n FROM symbols")
+        count = int(row["n"]) if row else 0
     finally:
         connection.close()
     if count == 0 and _build_catalogue is not None:
@@ -51,20 +54,20 @@ def _catalogue_counts(connection_factory: ConnectionFactory | None = None) -> di
     factory = connection_factory or _default_get_connection
     if factory is None:
         raise RuntimeError("No database connection factory is available.")
-    _ensure_symbols_catalogue(factory)
-    connection = factory()
+    _ensure_symbols_catalogue(connection_factory)
+    connection = SQLiteDatabase(connection_factory()) if connection_factory is not None else get_database()
     try:
-        row = connection.execute(
+        row = connection.fetchone(
             """
-            SELECT COUNT(*),
-                   COUNT(CASE WHEN sector IS NOT NULL AND TRIM(sector) <> '' THEN 1 END),
-                   COUNT(DISTINCT CASE WHEN sector IS NOT NULL AND TRIM(sector) <> '' THEN TRIM(sector) END)
+            SELECT COUNT(*) AS total,
+                   COUNT(CASE WHEN sector IS NOT NULL AND TRIM(sector) <> '' THEN 1 END) AS populated,
+                   COUNT(DISTINCT CASE WHEN sector IS NOT NULL AND TRIM(sector) <> '' THEN TRIM(sector) END) AS distinct_count
             FROM symbols
             """
-        ).fetchone()
+        )
     finally:
         connection.close()
-    total, populated, distinct = int(row[0]), int(row[1]), int(row[2])
+    total, populated, distinct = (int(row[key]) for key in ("total", "populated", "distinct_count")) if row else (0, 0, 0)
     total = max(total, 0)
     populated = max(0, min(populated, total))
     return {
@@ -105,20 +108,20 @@ def _sector_roster(connection_factory: ConnectionFactory | None = None) -> dict[
     factory = connection_factory or _default_get_connection
     if factory is None:
         return {}
-    connection = factory()
+    connection = SQLiteDatabase(connection_factory()) if connection_factory is not None else get_database()
     try:
-        rows = connection.execute(
+        rows = connection.fetchall(
             """
-            SELECT TRIM(sector), symbol FROM symbols
+            SELECT TRIM(sector) AS sector, symbol FROM symbols
             WHERE sector IS NOT NULL AND TRIM(sector) <> ''
-            ORDER BY TRIM(sector) COLLATE NOCASE, symbol ASC
+            ORDER BY LOWER(TRIM(sector)), symbol ASC
             """
-        ).fetchall()
+        )
     finally:
         connection.close()
     roster: dict[str, list[str]] = {}
-    for sector, symbol in rows:
-        roster.setdefault(str(sector), []).append(str(symbol))
+    for row in rows:
+        roster.setdefault(str(row["sector"]), []).append(str(row["symbol"]))
     return roster
 
 

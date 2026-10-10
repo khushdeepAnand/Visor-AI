@@ -7,7 +7,7 @@ import math
 import threading
 import re
 from datetime import datetime, timezone
-from typing import Any, Optional, Sequence
+from typing import Any, Optional, Sequence, Iterable
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -97,6 +97,22 @@ class PostgresDatabase(DatabaseInterface):
         finally:
             cursor.close()
             self._local.cursors.remove(cursor)
+
+    def executemany(self, query: str, params: Iterable[tuple[Any, ...]]) -> RealDictCursor:
+        conn = self._get_conn()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cursor.executemany(query, params)
+        except psycopg2.Error as exc:
+            cursor.close()
+            self.rollback()
+            raise type(exc)("PostgreSQL database operation failed.") from None
+        except Exception:
+            cursor.close()
+            self.rollback()
+            raise
+        self._local.cursors.append(cursor)
+        return cursor
     
     def fetchall(self, query: str, params: tuple[Any, ...] = ()) -> Sequence[dict[str, Any]]:
         cursor = self.execute(query, params)

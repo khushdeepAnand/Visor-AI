@@ -7,7 +7,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from database import get_connection
+from services.db.factory import dao_session
+from services.db.configuration import postgres_selected
 
 
 def _bounded_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -42,11 +43,20 @@ def _iso(value: datetime) -> str:
 
 def _delete_by_id(connection: Any, table: str, predicate: str, parameters: tuple[Any, ...], batch_size: int) -> int:
     # The table and predicate are fixed internal policy values, never request input.
-    cursor = connection.execute(
-        f"DELETE FROM {table} WHERE id IN (SELECT id FROM {table} WHERE {predicate} ORDER BY id LIMIT ?)",  # nosec B608
+    if table not in {"auth_sessions", "password_reset_tokens", "mfa_challenges", "audit_log", "admin_audit_log"}:
+        raise ValueError("Unknown retention table")
+    cursor = connection.execute(connection.sql(
+        f"DELETE FROM {table} WHERE id IN (SELECT id FROM {table} WHERE {predicate} ORDER BY id LIMIT ?)"),  # nosec B608
         (*parameters, int(batch_size)),
     )
     return max(0, int(cursor.rowcount or 0))
+
+
+def _older_than(column: str) -> str:
+    if column not in {"expires_at", "revoked_at", "used_at", "consumed_at", "created_at", "updated_at", "locked_until"}:
+        raise ValueError("Unknown retention timestamp")
+    return (f"CAST({column} AS TIMESTAMPTZ) < CAST(? AS TIMESTAMPTZ)" if postgres_selected()
+            else f"datetime({column}) < datetime(?)")
 
 
 def enforce_database_retention(policy: RetentionPolicy, *, now: datetime | None = None) -> dict[str, int]:
@@ -56,63 +66,58 @@ def enforce_database_retention(policy: RetentionPolicy, *, now: datetime | None 
     admin_cutoff = _iso(current - timedelta(days=policy.admin_audit_days))
     current_iso = _iso(current)
     counts: dict[str, int] = {}
-    connection = get_connection()
-    try:
-        connection.execute("BEGIN IMMEDIATE")
+    with dao_session() as factory:
+        connection = factory.db
+        connection.begin_write("database-retention")
         counts["auth_sessions"] = _delete_by_id(
             connection,
             "auth_sessions",
-            "datetime(expires_at) < datetime(?) OR (revoked_at IS NOT NULL AND datetime(revoked_at) < datetime(?))",
+            _older_than("expires_at") + " OR (revoked_at IS NOT NULL AND " + _older_than("revoked_at") + ")",
             (current_iso, security_cutoff),
             policy.batch_size,
         )
         counts["password_reset_tokens"] = _delete_by_id(
             connection,
             "password_reset_tokens",
-            "datetime(expires_at) < datetime(?) OR (used_at IS NOT NULL AND datetime(used_at) < datetime(?))",
+            _older_than("expires_at") + " OR (used_at IS NOT NULL AND " + _older_than("used_at") + ")",
             (current_iso, security_cutoff),
             policy.batch_size,
         )
         counts["mfa_challenges"] = _delete_by_id(
             connection,
             "mfa_challenges",
-            "datetime(expires_at) < datetime(?) OR (consumed_at IS NOT NULL AND datetime(consumed_at) < datetime(?))",
+            _older_than("expires_at") + " OR (consumed_at IS NOT NULL AND " + _older_than("consumed_at") + ")",
             (current_iso, security_cutoff),
             policy.batch_size,
         )
         counts["audit_log"] = _delete_by_id(
             connection,
             "audit_log",
-            "datetime(created_at) < datetime(?) AND action != 'research_disclaimer_acknowledged'",
+            _older_than("created_at") + " AND action != 'research_disclaimer_acknowledged'",
             (audit_cutoff,),
             policy.batch_size,
         )
         counts["admin_audit_log"] = _delete_by_id(
             connection,
             "admin_audit_log",
-            "datetime(created_at) < datetime(?)",
+            _older_than("created_at"),
             (admin_cutoff,),
             policy.batch_size,
         )
-        cursor = connection.execute(
-            """
+        query = f"""
             DELETE FROM auth_login_attempts
             WHERE identifier IN (
                 SELECT identifier FROM auth_login_attempts
-                WHERE datetime(updated_at) < datetime(?)
-                  AND (locked_until IS NULL OR datetime(locked_until) < datetime(?))
+                 WHERE {_older_than('updated_at')}
+                   AND (locked_until IS NULL OR {_older_than('locked_until')})
                 ORDER BY updated_at LIMIT ?
             )
-            """,
+            """  # nosec B608
+        cursor = connection.execute(connection.sql(query),
             (security_cutoff, current_iso, policy.batch_size),
         )
         counts["auth_login_attempts"] = max(0, int(cursor.rowcount or 0))
         connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
     return counts
 
 

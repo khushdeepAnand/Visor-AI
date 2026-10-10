@@ -21,13 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-APPLICATION_TABLES = frozenset("""users admin_audit_log oauth_identities auth_sessions user_mfa mfa_recovery_codes
-    mfa_challenges auth_login_attempts password_reset_tokens symbols portfolio watchlist transactions
-    prediction_history settings model_health paper_accounts paper_positions paper_orders paper_trade_journal
-    paper_badges paper_challenge_entries user_workspace_layouts price_alerts chart_preferences chart_drawings
-    audit_log sentiment_snapshots webauthn_credentials login_devices login_anomalies app_settings
-    admin_step_up_tokens admin_step_up_failures forecast_kill_switches feature_flag_state status_banners
-    saved_chart_layouts screener_saved_screens strategy_definitions forward_tests forward_test_events""".split())
+from services.db.base import APPLICATION_TABLES
 
 TIMESTAMP_COLUMNS = frozenset("""created_at updated_at last_login_at issued_at expires_at revoked_at consumed_at used_at
     origin_timestamp target_timestamp data_timestamp feature_timestamp settlement_data_timestamp settled_at evaluated_at

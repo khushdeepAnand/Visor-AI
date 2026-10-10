@@ -158,6 +158,10 @@ def create_tables():
     Existing tables and data are preserved.
     """
 
+    if postgres_selected():
+        _verify_postgres_schema()
+        return
+
     conn = _open_connection()
     cursor = conn.cursor()
 
@@ -1789,6 +1793,15 @@ def get_prediction_details(user_id, symbol=None, limit=50):
 def database_health_check():
     """Return a compact, non-sensitive database health report."""
 
+    if postgres_selected():
+        try:
+            _verify_postgres_schema()
+            return {"status": "Operational", "integrity": "schema_verified", "backend": "postgresql",
+                    "encryption": "server-managed; at-rest state not inspected", "sqlcipher_available": SQLCIPHER_AVAILABLE}
+        except Exception:
+            return {"status": "Unavailable", "integrity": "unknown", "backend": "postgresql",
+                    "encryption": "unknown", "sqlcipher_available": SQLCIPHER_AVAILABLE}
+
     try:
         conn = get_connection()
         cursor = conn.cursor()
@@ -1819,6 +1832,25 @@ def database_health_check():
         }
     except sqlite3.Error:
         return {"status": "Unavailable", "integrity": "unknown", "encryption": "unknown", "sqlcipher_available": SQLCIPHER_AVAILABLE}
+
+
+def _verify_postgres_schema():
+    """Read-only application preflight. DDL belongs to direct-URL Alembic runs."""
+    from services.db.factory import dao_session
+    from services.db.base import APPLICATION_TABLES
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    config = Config(os.path.join(BASE_DIR, "alembic.ini"))
+    config.set_main_option("script_location", os.path.join(BASE_DIR, "alembic"))
+    expected = ScriptDirectory.from_config(config).get_current_head()
+    with dao_session() as factory:
+        db = factory.db
+        revision = db.fetchone("SELECT version_num FROM alembic_version")
+        if not revision or revision["version_num"] != expected:
+            raise RuntimeError("PostgreSQL migrations are not at the required head")
+        tables = {row["table_name"] for row in db.fetchall("SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema()")}
+        if not APPLICATION_TABLES <= tables:
+            raise RuntimeError("PostgreSQL application schema is incomplete")
 
 
 def encrypt_database(encryption_key: str) -> dict[str, Any]:

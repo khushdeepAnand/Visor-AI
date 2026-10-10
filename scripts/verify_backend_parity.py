@@ -172,6 +172,7 @@ def check_live_parity(url: str) -> list[str]:
             _probe_runtime_helpers(make_dsn(url, options="-csearch_path=" + schema), postgres, sqlite)
             completed.append("explicit PostgreSQL selection routes portfolio/watchlist/prediction/audit and password/OIDC authentication through shared persistence with no SQLite writes")
             completed.append("real PostgreSQL JWT sessions, revocation/ownership, encrypted TOTP, device-bound challenge caps/replay, concurrent recovery consumption and real P-256 WebAuthn verification")
+            completed.append("real PostgreSQL admin promotion/step-up/batch rollback, bounded settings/compliance, owned layouts/screens/strategies/forward events and guardrail/banner lifecycle")
             _probe_rls(admin, schema)
             completed.append("unprivileged role denied by grants; granting SELECT still returns zero rows under policy-free RLS; owner connection bypass identified")
             _probe_concurrency(postgres)
@@ -213,6 +214,8 @@ def _probe_runtime_helpers(url: str, postgres: Any, sqlite: Any) -> None:
     try:
         os.environ["DB_BACKEND"] = "postgresql"
         os.environ["DATABASE_URL"] = url
+        database.create_tables()
+        assert database.database_health_check()["status"] == "Operational"
         database.buy_stock(uid, "TCS", "TCS", 4, 100)
         holding = database.get_portfolio(uid)[0]
         assert holding[3] == 4 and len(database.get_transactions(uid)) == 1
@@ -259,6 +262,7 @@ def _probe_runtime_helpers(url: str, postgres: Any, sqlite: Any) -> None:
         assert sqlite.db.fetchone("SELECT count(*) AS n FROM prediction_history")["n"] == prediction_count
         assert sqlite.db.fetchone("SELECT count(*) AS n FROM portfolio")["n"] == original
         _probe_password_authentication(postgres)
+        _probe_admin_and_saved_content(postgres, uid)
     finally:
         close_dao_pools()
         for name, value in saved.items():
@@ -266,6 +270,86 @@ def _probe_runtime_helpers(url: str, postgres: Any, sqlite: Any) -> None:
                 os.environ.pop(name, None)
             else:
                 os.environ[name] = value
+
+
+def _probe_admin_and_saved_content(postgres: Any, uid: int) -> None:
+    import authentication
+    from services import admin_registry, compliance
+    from services.admin_step_up import STEP_UP, StepUpError
+    from services.chart_layouts import CHART_LAYOUTS, ChartLayoutError
+    from services.screener import SCREENS, ScreenerError
+    from services.strategy_builder import STRATEGIES, starter_strategies, StrategyError
+    from services.forward_test import FORWARD_TESTS, ForwardTestError
+    from services.forecast_guardrails import GUARDRAILS, FEATURE_FLAGS
+    admin_email = "password-parity@example.test"
+    admin = postgres.create_user_dao().get_user_by_email(admin_email)
+    promoted = admin_registry.bootstrap_admins([admin_email])
+    assert promoted["promoted"] == [admin_email] and admin_registry.aggregate_counts()["admins"] == 1
+    token = STEP_UP.challenge(actor_email=admin_email, password="ConcurrentPass9!x", action="cache_invalidation", actor_id=admin["id"])
+    assert STEP_UP.consume(actor_email=admin_email, token=token["step_up_token"], action="cache_invalidation", actor_id=admin["id"])
+    try:
+        STEP_UP.consume(actor_email=admin_email, token=token["step_up_token"], action="cache_invalidation", actor_id=admin["id"])
+    except StepUpError:
+        pass
+    else:
+        raise AssertionError("admin step-up replay accepted")
+    admin_registry.update_settings({"quote_cache_seconds": 21}, actor_email=admin_email)
+    assert admin_registry.get_settings()["quote_cache_seconds"] == 21
+    compliance.update_review_item("privacy_retention", status="in_progress", note="Disposable verification evidence only", actor_id=admin["id"], actor_email=admin_email)
+    assert next(row for row in compliance.review_checklist() if row["id"] == "privacy_retention")["status"] == "in_progress"
+    assert compliance.research_acknowledgment_required(uid)
+    import database
+    database.record_audit_event(uid, "research_disclaimer_acknowledged", entity_id=compliance.RESEARCH_ACKNOWLEDGMENT_VERSION)
+    assert not compliance.research_acknowledgment_required(uid)
+    admin_registry.apply_account_actions([uid], "suspend", actor_id=admin["id"], actor_email=admin_email, reason="Disposable suspension verification")
+    assert authentication.get_user_by_id(uid)["account_status"] == "suspended"
+    try:
+        admin_registry.apply_account_actions([uid, uid + 10000], "reinstate", actor_id=admin["id"], actor_email=admin_email, reason="Disposable atomic rollback verification")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("missing account allowed partial batch")
+    assert authentication.get_user_by_id(uid)["account_status"] == "suspended"
+    admin_registry.apply_account_actions([uid], "reinstate", actor_id=admin["id"], actor_email=admin_email, reason="Disposable reinstatement verification")
+    layout = CHART_LAYOUTS.save_layout(user_id=uid, name="Parity layout", symbol="TCS", timeframe="1D", overlays={"ema": True})
+    assert CHART_LAYOUTS.get_layout(user_id=uid, layout_id=layout["id"])["overlays"] == {"ema": True}
+    screen = SCREENS.save_screen(user_id=uid, name="Parity screen", filters=[{"field": "rsi_14", "op": "lt", "value": 70}], symbols=["TCS"])
+    assert SCREENS.get_screen(user_id=uid, screen_id=screen["id"])["symbols"] == ["TCS"]
+    strategy = STRATEGIES.save(uid, starter_strategies()[0])
+    assert STRATEGIES.get(uid, strategy["id"])["name"] == strategy["name"]
+    ownership_operations: tuple[tuple[Callable[[], Any], type[Exception]], ...] = (
+        (lambda: CHART_LAYOUTS.get_layout(user_id=uid + 10000, layout_id=layout["id"]), ChartLayoutError),
+        (lambda: SCREENS.get_screen(user_id=uid + 10000, screen_id=screen["id"]), ScreenerError),
+        (lambda: STRATEGIES.get(uid + 10000, strategy["id"]), StrategyError),
+    )
+    for operation, error_type in ownership_operations:
+        try:
+            operation()
+        except error_type:
+            pass
+        else:
+            raise AssertionError("saved content crossed account ownership")
+    forward = FORWARD_TESTS.start(uid, strategy_id=strategy["id"], name="Parity forward", symbols=["TCS"])
+    assert FORWARD_TESTS.get(uid, forward["id"])["status"] == "active"
+    event: dict[str, Any] = {"symbol": "TCS", "bar_at": "2026-10-10T10:00:00+00:00", "action": "BUY", "price": 100., "reason": "parity"}
+    assert FORWARD_TESTS._record_events(forward["id"], [event], stamp=event["bar_at"]) == 1
+    assert FORWARD_TESTS._record_events(forward["id"], [event], stamp=event["bar_at"]) == 0
+    assert len(FORWARD_TESTS.events(forward["id"])) == 1
+    FORWARD_TESTS.stop(uid, forward["id"])
+    switch = GUARDRAILS.create_kill_switch(scope="symbol", target="TCS", reason="Disposable guardrail verification", expires_in_hours=1)
+    assert GUARDRAILS.evaluate_forecast_request({"symbol": "TCS"})["blocked"]
+    GUARDRAILS.revoke_kill_switch(switch["id"], reason="Disposable guardrail recovery")
+    assert not GUARDRAILS.evaluate_forecast_request({"symbol": "TCS"})["blocked"]
+    flag = next(iter(FEATURE_FLAGS))
+    GUARDRAILS.set_feature_flag(flag, enabled=True, rollout_percent=100, reason="Disposable feature flag verification")
+    assert GUARDRAILS.is_feature_enabled(flag, subject="parity")
+    banner = GUARDRAILS.draft_banner(level="info", headline="Parity banner", body="Disposable banner verification only", ends_in_hours=1)
+    GUARDRAILS.publish_banner(banner["id"], confirmed_preview=True)
+    assert any(row["id"] == banner["id"] for row in GUARDRAILS.active_banners())
+    GUARDRAILS.withdraw_banner(banner["id"])
+    assert not any(row["id"] == banner["id"] for row in GUARDRAILS.active_banners())
+    CHART_LAYOUTS.delete_layout(user_id=uid, layout_id=layout["id"])
+    SCREENS.delete_screen(user_id=uid, screen_id=screen["id"])
 
 
 def _probe_password_authentication(postgres: Any) -> None:

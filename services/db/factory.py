@@ -6,7 +6,7 @@ import threading
 from contextlib import contextmanager
 from typing import Any, Optional, Iterator
 
-from .base import DAOFactory
+from .base import DAOFactory, DatabaseInterface
 from .sqlite_impl import SQLiteDAOFactory
 from .postgres_impl import PostgresDAOFactory
 from .configuration import postgres_url, backend_name
@@ -15,13 +15,7 @@ _pools: dict[tuple[str, int], PostgresDAOFactory] = {}
 _pool_lock = threading.Lock()
 
 
-@contextmanager
-def dao_session() -> Iterator[DAOFactory]:
-    """Reuse process pools and release the calling thread's lease on every exit.
-
-    Domain services own transaction boundaries; this scope never commits
-    implicitly. Nested write operations must share this factory explicitly.
-    """
+def _session_factory() -> DAOFactory:
     from .configuration import postgres_selected
     if postgres_selected():
         dsn = postgres_url()
@@ -35,6 +29,21 @@ def dao_session() -> Iterator[DAOFactory]:
             factory: DAOFactory = _pools[key]
     else:
         factory = SQLiteDAOFactory()
+    return factory
+
+
+def get_database() -> DatabaseInterface:
+    """For existing stores with explicit try/finally close ownership."""
+    return _session_factory().db
+
+
+@contextmanager
+def dao_session() -> Iterator[DAOFactory]:
+    """Reuse pools; release calling thread's lease without an implicit commit.
+
+    Nested write operations must share the owning factory explicitly.
+    """
+    factory = _session_factory()
     try:
         yield factory
     finally:

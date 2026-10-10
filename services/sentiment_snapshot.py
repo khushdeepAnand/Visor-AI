@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
+from services.db.factory import get_database
+from services.db.sqlite_impl import SQLiteDatabase
 
 try:
     from database import get_connection as _default_get_connection
@@ -82,9 +84,9 @@ def capture_snapshot(
     avg = round(sum(scored) / len(scored), 4) if scored else None
     timestamp = (snapshot_at or _now()).isoformat()
     symbol_clean = str(symbol).strip().upper()
-    connection = factory()
+    connection = SQLiteDatabase(connection_factory()) if connection_factory is not None else get_database()
     try:
-        connection.execute(
+        connection.execute(connection.sql(
             """
             INSERT INTO sentiment_snapshots (symbol, snapshot_at, avg_score, headline_count, scored_count, source)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -93,7 +95,7 @@ def capture_snapshot(
                 headline_count = excluded.headline_count,
                 scored_count = excluded.scored_count,
                 source = excluded.source
-            """,
+            """),
             (symbol_clean, timestamp, avg, len(items), len(scored), source),
         )
         connection.commit()
@@ -124,28 +126,28 @@ def history(
     days = max(1, min(int(days), 365))
     cutoff = (_now() - timedelta(days=days)).isoformat()
     symbol_clean = str(symbol).strip().upper()
-    connection = factory()
+    connection = SQLiteDatabase(connection_factory()) if connection_factory is not None else get_database()
     try:
-        rows = connection.execute(
+        rows = connection.fetchall(connection.sql(
             """
             SELECT snapshot_at, avg_score, headline_count, scored_count, source
             FROM sentiment_snapshots
             WHERE symbol = ? AND snapshot_at >= ?
             ORDER BY snapshot_at ASC
-            """,
+            """),
             (symbol_clean, cutoff),
-        ).fetchall()
+        )
     finally:
         connection.close()
 
     series = [
         {
-            "snapshot_at": str(row[0]),
-            "avg_score": row[1],
-            "label": label_for(row[1]),
-            "headline_count": int(row[2]),
-            "scored_count": int(row[3]),
-            "source": str(row[4] or ""),
+            "snapshot_at": str(row["snapshot_at"]),
+            "avg_score": row["avg_score"],
+            "label": label_for(row["avg_score"]),
+            "headline_count": int(row["headline_count"]),
+            "scored_count": int(row["scored_count"]),
+            "source": str(row["source"] or ""),
         }
         for row in rows
     ]

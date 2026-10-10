@@ -64,6 +64,8 @@ async def lifespan(_app: FastAPI):
         FORECAST_JOBS.shutdown()
         from services.telemetry import shutdown_telemetry
         shutdown_telemetry()
+        from services.db.factory import close_dao_pools
+        close_dao_pools()
 
 
 app = FastAPI(

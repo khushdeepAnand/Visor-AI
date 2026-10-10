@@ -3,7 +3,15 @@ from __future__ import annotations
 
 import abc
 from datetime import datetime, timezone
-from typing import Any, Optional, Sequence
+from typing import Any, Optional, Sequence, Iterable
+
+APPLICATION_TABLES = frozenset("""users admin_audit_log oauth_identities auth_sessions user_mfa mfa_recovery_codes
+    mfa_challenges auth_login_attempts password_reset_tokens symbols portfolio watchlist transactions
+    prediction_history settings model_health paper_accounts paper_positions paper_orders paper_trade_journal
+    paper_badges paper_challenge_entries user_workspace_layouts price_alerts chart_preferences chart_drawings
+    audit_log sentiment_snapshots webauthn_credentials login_devices login_anomalies app_settings
+    admin_step_up_tokens admin_step_up_failures forecast_kill_switches feature_flag_state status_banners
+    saved_chart_layouts screener_saved_screens strategy_definitions forward_tests forward_test_events""".split())
 
 
 class DatabaseInterface(abc.ABC):
@@ -32,6 +40,11 @@ class DatabaseInterface(abc.ABC):
     @abc.abstractmethod
     def execute(self, query: str, params: tuple[Any, ...] = ()) -> Any:
         """Execute a query."""
+        pass
+
+    @abc.abstractmethod
+    def executemany(self, query: str, params: Iterable[tuple[Any, ...]]) -> Any:
+        """Bulk bound statements within the owning transaction."""
         pass
     
     @abc.abstractmethod

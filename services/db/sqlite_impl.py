@@ -5,7 +5,7 @@ import sqlite3
 import math
 from .update_fields import USER_FIELDS, SETTINGS_FIELDS, validate_fields
 from datetime import datetime, timezone
-from typing import Any, Optional, Sequence
+from typing import Any, Optional, Sequence, Iterable
 
 from .base import (
     DatabaseInterface,
@@ -42,6 +42,9 @@ class SQLiteDatabase(DatabaseInterface):
     
     def execute(self, query: str, params: tuple[Any, ...] = ()) -> sqlite3.Cursor:
         return self._conn.execute(query, params)
+
+    def executemany(self, query: str, params: Iterable[tuple[Any, ...]]) -> sqlite3.Cursor:
+        return self._conn.executemany(query, params)
     
     def fetchone(self, query: str, params: tuple[Any, ...] = ()) -> Optional[dict[str, Any]]:
         cursor = self._conn.execute(query, params)

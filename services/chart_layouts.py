@@ -15,6 +15,10 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Sequence
+from services.db.base import DatabaseInterface
+from services.db.sqlite_impl import SQLiteDatabase
+from services.db.factory import get_database
+from services.db.configuration import postgres_selected
 
 try:  # package layout
     from database import get_connection as _default_get_connection
@@ -49,7 +53,15 @@ class ChartLayoutStore:
     def __init__(self, connection_factory: ConnectionFactory | None = None) -> None:
         self._factory = connection_factory
 
-    def _connect(self) -> sqlite3.Connection:
+    def _connect(self) -> DatabaseInterface:
+        if self._factory is None and postgres_selected():
+            db = get_database()
+            try:
+                db.fetchall("SELECT id FROM saved_chart_layouts LIMIT 0")
+                return db
+            except Exception:
+                db.close()
+                raise
         factory = self._factory or _default_get_connection
         if factory is None:  # pragma: no cover - only in a broken install
             raise ChartLayoutError("chart_layout_storage_unavailable", "No database connection factory is available.")
@@ -71,7 +83,7 @@ class ChartLayoutStore:
             """
         )
         connection.commit()
-        return connection
+        return SQLiteDatabase(connection)
 
     @staticmethod
     def _visible_range(value: str | None) -> dict[str, Any] | None:
@@ -90,16 +102,16 @@ class ChartLayoutStore:
         return {"from": float(data["from"]), "to": float(data["to"])}
 
     @staticmethod
-    def _row(row: sqlite3.Row | tuple[Any, ...]) -> dict[str, Any]:
+    def _row(row: dict[str, Any]) -> dict[str, Any]:
         return {
-            "id": row[0],
-            "name": row[1],
-            "symbol": row[2],
-            "timeframe": row[3],
-            "overlays": json.loads(row[4]) if row[4] else {},
-            "visible_range": ChartLayoutStore._visible_range(row[5]),
-            "created_at": row[6],
-            "updated_at": row[7],
+            "id": row["id"],
+            "name": row["name"],
+            "symbol": row["symbol"],
+            "timeframe": row["timeframe"],
+            "overlays": json.loads(row["overlays_json"]) if row["overlays_json"] else {},
+            "visible_range": ChartLayoutStore._visible_range(row["visible_range_json"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
         }
 
     def save_layout(
@@ -131,16 +143,17 @@ class ChartLayoutStore:
         stamp = datetime.now(timezone.utc).isoformat()
         connection = self._connect()
         try:
-            existing = connection.execute(
-                "SELECT COUNT(*) FROM saved_chart_layouts WHERE user_id = ? AND name != ?",
+            connection.begin_write("saved-chart-layouts:" + str(int(user_id)))
+            existing = connection.fetchone(connection.sql(
+                "SELECT COUNT(*) AS n FROM saved_chart_layouts WHERE user_id = ? AND name != ?"),
                 (int(user_id), label),
-            ).fetchone()
-            if existing and int(existing[0]) >= MAX_SAVED_LAYOUTS:
+            )
+            if existing and int(existing["n"]) >= MAX_SAVED_LAYOUTS:
                 raise ChartLayoutError(
                     "chart_layout_saved_limit",
                     f"A maximum of {MAX_SAVED_LAYOUTS} saved layouts per account is supported.",
                 )
-            connection.execute(
+            connection.execute(connection.sql(
                 """
                 INSERT INTO saved_chart_layouts(user_id, name, symbol, timeframe, overlays_json, visible_range_json, created_at, updated_at)
                 VALUES(?, ?, ?, ?, ?, ?, ?, ?)
@@ -150,7 +163,7 @@ class ChartLayoutStore:
                     overlays_json = excluded.overlays_json,
                     visible_range_json = excluded.visible_range_json,
                     updated_at = excluded.updated_at
-                """,
+                """),
                 (
                     int(user_id),
                     label,
@@ -163,13 +176,13 @@ class ChartLayoutStore:
                 ),
             )
             connection.commit()
-            row = connection.execute(
+            row = connection.fetchone(connection.sql(
                 """
                 SELECT id, name, symbol, timeframe, overlays_json, visible_range_json, created_at, updated_at
                 FROM saved_chart_layouts WHERE user_id = ? AND name = ?
-                """,
+                """),
                 (int(user_id), label),
-            ).fetchone()
+            )
         finally:
             connection.close()
         if row is None:  # pragma: no cover - defensive
@@ -179,13 +192,13 @@ class ChartLayoutStore:
     def list_layouts(self, *, user_id: int) -> list[dict[str, Any]]:
         connection = self._connect()
         try:
-            rows = connection.execute(
+            rows = connection.fetchall(connection.sql(
                 """
                 SELECT id, name, symbol, timeframe, overlays_json, visible_range_json, created_at, updated_at
                 FROM saved_chart_layouts WHERE user_id = ? ORDER BY updated_at DESC
-                """,
+                """),
                 (int(user_id),),
-            ).fetchall()
+            )
         finally:
             connection.close()
         return [self._row(row) for row in rows]
@@ -193,13 +206,13 @@ class ChartLayoutStore:
     def get_layout(self, *, user_id: int, layout_id: int) -> dict[str, Any]:
         connection = self._connect()
         try:
-            row = connection.execute(
+            row = connection.fetchone(connection.sql(
                 """
                 SELECT id, name, symbol, timeframe, overlays_json, visible_range_json, created_at, updated_at
                 FROM saved_chart_layouts WHERE user_id = ? AND id = ?
-                """,
+                """),
                 (int(user_id), int(layout_id)),
-            ).fetchone()
+            )
         finally:
             connection.close()
         if row is None:
@@ -209,8 +222,8 @@ class ChartLayoutStore:
     def delete_layout(self, *, user_id: int, layout_id: int) -> dict[str, Any]:
         connection = self._connect()
         try:
-            cursor = connection.execute(
-                "DELETE FROM saved_chart_layouts WHERE user_id = ? AND id = ?",
+            cursor = connection.execute(connection.sql(
+                "DELETE FROM saved_chart_layouts WHERE user_id = ? AND id = ?"),
                 (int(user_id), int(layout_id)),
             )
             connection.commit()

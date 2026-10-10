@@ -26,7 +26,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from database import get_connection
+from services.db.factory import dao_session
 from services.paper_trading_v6 import _fill_price, ensure_schema  # noqa: F401 (schema import keeps table creation centralised)
 
 DEFAULT_SPREAD_BPS = 5.0
@@ -201,29 +201,25 @@ def record_attempt(user_id: int, key: str, choice: str) -> dict[str, Any]:
     """Persist (or replace) one user's attempt at a scenario and return the reveal."""
     result = resolve_choice(key, choice)
     ensure_schema()
-    conn = get_connection()
-    conn.execute(
+    with dao_session() as factory:
+        conn = factory.db
+        conn.execute(conn.sql(
         """
         INSERT INTO paper_challenge_entries(user_id, challenge_key, choice, score, created_at)
         VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(user_id, challenge_key) DO UPDATE SET
             choice=excluded.choice, score=excluded.score, created_at=excluded.created_at
-        """,
+        """),
         (int(user_id), key, choice, result["choice"]["return_pct"], datetime.now(timezone.utc).isoformat()),
-    )
-    conn.commit()
-    conn.close()
+        )
+        conn.commit()
     return result
 
 
 def my_attempts(user_id: int) -> list[dict[str, Any]]:
-    conn = get_connection()
-    rows = conn.execute(
-        "SELECT challenge_key, choice, score, created_at FROM paper_challenge_entries WHERE user_id=?",
-        (int(user_id),),
-    ).fetchall()
-    conn.close()
+    with dao_session() as factory:
+        rows = factory.db.fetchall(factory.db.sql("SELECT challenge_key,choice,score,created_at FROM paper_challenge_entries WHERE user_id=?"), (int(user_id),))
     return [
-        {"key": key, "choice": choice, "return_pct": score, "attempted_at": created_at}
-        for key, choice, score, created_at in rows
+        {"key": row["challenge_key"], "choice": row["choice"], "return_pct": row["score"], "attempted_at": row["created_at"]}
+        for row in rows
     ]

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import os
+import math
 from typing import Any
 
-from database import get_connection, record_audit_event
+from database import record_audit_event
+from services.db.factory import dao_session
 from forecasting.interval_forecast import TRAINING_WINDOWS
 from services.market_data.manager import MANAGER
 from services.email_service import send_alert_email
@@ -37,19 +39,20 @@ def create_price_alert(
     confidence_level = float(confidence_level)
     if condition not in VALID_CONDITIONS:
         raise ValueError(f"Alert condition must be one of {sorted(VALID_CONDITIONS)}.")
-    if threshold <= 0:
+    if not math.isfinite(threshold) or threshold <= 0:
         raise ValueError("Alert threshold must be positive.")
     if training_window not in TRAINING_WINDOWS:
         raise ValueError(f"training_window must be one of {sorted(TRAINING_WINDOWS)}")
     if not 0.60 <= confidence_level <= 0.95:
         raise ValueError("confidence_level must be between 0.60 and 0.95.")
-    conn = get_connection()
-    cursor = conn.execute(
-        "INSERT INTO price_alerts(user_id, symbol, condition, threshold, training_window, confidence_level, email_enabled) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (int(user_id), symbol, condition, threshold, training_window, confidence_level, int(email_enabled)),
-    )
-    alert_id = int(cursor.lastrowid)
-    conn.commit(); conn.close()
+    with dao_session() as factory:
+        conn = factory.db
+        cursor = conn.execute(conn.sql(
+            "INSERT INTO price_alerts(user_id, symbol, condition, threshold, training_window, confidence_level, email_enabled) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"),
+            (int(user_id), symbol, condition, threshold, training_window, confidence_level, int(email_enabled)),
+        )
+        alert_id = int(cursor.fetchone()["id"])
+        conn.commit()
     record_audit_event(
         user_id,
         "price_alert_created",
@@ -66,29 +69,33 @@ def list_price_alerts(user_id: int, *, active_only: bool = False) -> list[dict[s
     if active_only:
         sql += " AND is_active = 1"
     sql += " ORDER BY id DESC"
-    conn = get_connection(); rows = conn.execute(sql, params).fetchall(); conn.close()
+    with dao_session() as factory:
+        rows = factory.db.fetchall(factory.db.sql(sql), tuple(params))
     return [
         {
-            "id": row[0], "symbol": row[1], "condition": row[2], "threshold": float(row[3]),
-            "training_window": row[4] or "1mo", "confidence_level": float(row[5] or 0.80),
-            "is_active": bool(row[6]), "created_at": row[7], "last_triggered_at": row[8],
-            "email_enabled": bool(row[9]), "last_email_at": row[10],
+            "id": row["id"], "symbol": row["symbol"], "condition": row["condition"], "threshold": float(row["threshold"]),
+            "training_window": row["training_window"] or "1mo", "confidence_level": float(row["confidence_level"] or 0.80),
+            "is_active": bool(row["is_active"]), "created_at": row["created_at"], "last_triggered_at": row["last_triggered_at"],
+            "email_enabled": bool(row["email_enabled"]), "last_email_at": row["last_email_at"],
         }
         for row in rows
     ]
 
 
 def set_alert_active(user_id: int, alert_id: int, active: bool) -> bool:
-    conn = get_connection()
-    cursor = conn.execute("UPDATE price_alerts SET is_active = ? WHERE id = ? AND user_id = ?", (1 if active else 0, int(alert_id), int(user_id)))
-    conn.commit(); changed = cursor.rowcount > 0; conn.close()
-    return changed
+    with dao_session() as factory:
+        conn = factory.db
+        cursor = conn.execute(conn.sql("UPDATE price_alerts SET is_active = ? WHERE id = ? AND user_id = ?"), (1 if active else 0, int(alert_id), int(user_id)))
+        conn.commit()
+        return bool(cursor.rowcount > 0)
 
 
 def delete_price_alert(user_id: int, alert_id: int) -> bool:
-    conn = get_connection()
-    cursor = conn.execute("DELETE FROM price_alerts WHERE id = ? AND user_id = ?", (int(alert_id), int(user_id)))
-    conn.commit(); changed = cursor.rowcount > 0; conn.close()
+    with dao_session() as factory:
+        conn = factory.db
+        cursor = conn.execute(conn.sql("DELETE FROM price_alerts WHERE id = ? AND user_id = ?"), (int(alert_id), int(user_id)))
+        conn.commit()
+        changed = bool(cursor.rowcount > 0)
     if changed:
         record_audit_event(user_id, "price_alert_deleted", "price_alert", alert_id)
     return changed
@@ -110,10 +117,14 @@ def evaluate_price_alerts(
     alerts = list_price_alerts(user_id, active_only=True)
     triggered: list[dict[str, Any]] = []
     now = datetime.now(timezone.utc).isoformat()
-    conn = get_connection()
-    try:
+    with dao_session() as factory:
+        conn = factory.db
+        conn.begin_write("alerts:" + str(int(user_id)))
         for alert in alerts:
-            last_triggered = alert.get("last_triggered_at")
+            current_state = conn.fetchone(conn.sql("SELECT last_triggered_at,is_active FROM price_alerts WHERE id=? AND user_id=?"), (alert["id"], int(user_id)))
+            if current_state is None or not current_state["is_active"]:
+                continue
+            last_triggered = current_state["last_triggered_at"]
             if last_triggered:
                 try:
                     elapsed = datetime.now(timezone.utc) - datetime.fromisoformat(str(last_triggered).replace("Z", "+00:00"))
@@ -136,7 +147,7 @@ def evaluate_price_alerts(
                 hit = float(band["low"]) <= threshold
             if not hit:
                 continue
-            conn.execute("UPDATE price_alerts SET last_triggered_at = ? WHERE id = ?", (now, alert["id"]))
+            conn.execute(conn.sql("UPDATE price_alerts SET last_triggered_at = ? WHERE id = ? AND user_id=?"), (now, alert["id"], int(user_id)))
             item = {**alert, "current_price": current, "triggered_at": now}
             if band is not None and condition in FORECAST_CONDITIONS:
                 item["forecast"] = {
@@ -145,8 +156,6 @@ def evaluate_price_alerts(
                 }
             triggered.append(item)
         conn.commit()
-    finally:
-        conn.close()
     return triggered
 
 
@@ -162,11 +171,9 @@ def deliver_triggered_alerts(user_id: int, email: str, triggered: list[dict[str,
         except Exception:
             status = "failed"
         if status == "sent":
-            conn = get_connection()
-            try:
-                conn.execute("UPDATE price_alerts SET last_email_at=? WHERE id=? AND user_id=?", (alert["triggered_at"], alert["id"], int(user_id)))
+            with dao_session() as factory:
+                conn = factory.db
+                conn.execute(conn.sql("UPDATE price_alerts SET last_email_at=? WHERE id=? AND user_id=?"), (alert["triggered_at"], alert["id"], int(user_id)))
                 conn.commit()
-            finally:
-                conn.close()
         results.append({"alert_id": alert["id"], "channel": "email", "status": status})
     return results

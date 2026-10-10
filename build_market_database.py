@@ -6,7 +6,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from database import create_tables, get_connection
+from database import create_tables
+from services.db.factory import dao_session
+from services.db.configuration import backend_name
 
 ROOT = Path(__file__).resolve().parent
 FILES = [
@@ -44,22 +46,17 @@ def build() -> int:
     frames = [_read_catalogue(path) for path in FILES]
     combined = pd.concat(frames, ignore_index=True)
     combined.drop_duplicates(subset=["symbol", "exchange"], keep="first", inplace=True)
+    combined = combined.astype(object).where(pd.notna(combined), None)
 
-    connection = get_connection()
-    try:
+    with dao_session() as factory:
+        connection = factory.db
+        connection.begin_write("symbol-catalogue-rebuild")
         connection.execute("DELETE FROM symbols")
-        connection.executemany(
-            """
-            INSERT INTO symbols(name, symbol, exchange, country, sector)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            combined[REQUIRED_COLUMNS].itertuples(index=False, name=None),
-        )
+        connection.executemany(connection.sql("INSERT INTO symbols(name,symbol,exchange,country,sector) VALUES(?,?,?,?,?)"),
+                               combined[REQUIRED_COLUMNS].itertuples(index=False, name=None))
         connection.commit()
-    finally:
-        connection.close()
 
-    print(f"Database ready. {len(combined)} symbols loaded into database/stockpilot.db.")
+    print(f"Database ready. {len(combined)} symbols loaded into the selected {backend_name()} catalogue.")
     return int(len(combined))
 
 

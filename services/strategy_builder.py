@@ -24,6 +24,10 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+from services.db.base import DatabaseInterface
+from services.db.sqlite_impl import SQLiteDatabase
+from services.db.factory import get_database
+from services.db.configuration import postgres_selected
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Sequence, cast
 
@@ -669,16 +673,17 @@ class StrategyStore:
     def __init__(self, connection_factory: Callable[[], sqlite3.Connection] | None = None) -> None:
         self._connection_factory = connection_factory
 
-    def _connect(self) -> sqlite3.Connection:
+    def _connect(self) -> DatabaseInterface:
         if self._connection_factory is not None:
-            return self._connection_factory()
-        from database import get_connection
-
-        return cast(sqlite3.Connection, get_connection())
+            return SQLiteDatabase(self._connection_factory())
+        return get_database()
 
     def ensure_schema(self) -> None:
         connection = self._connect()
         try:
+            if self._connection_factory is None and postgres_selected():
+                connection.fetchall("SELECT id FROM strategy_definitions LIMIT 0")
+                return
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS strategy_definitions (
@@ -702,14 +707,16 @@ class StrategyStore:
         stamp = datetime.now(timezone.utc).isoformat()
         connection = self._connect()
         try:
-            count = connection.execute(
-                "SELECT COUNT(*) FROM strategy_definitions WHERE user_id = ?",
+            connection.begin_write("saved-strategies:" + str(int(user_id)))
+            count_row = connection.fetchone(connection.sql(
+                "SELECT COUNT(*) AS n FROM strategy_definitions WHERE user_id = ?"),
                 (int(user_id),),
-            ).fetchone()[0]
-            existing = connection.execute(
-                "SELECT id FROM strategy_definitions WHERE user_id = ? AND name = ?",
+            )
+            count = int(count_row["n"]) if count_row else 0
+            existing = connection.fetchone(connection.sql(
+                "SELECT id FROM strategy_definitions WHERE user_id = ? AND name = ?"),
                 (int(user_id), compiled["name"]),
-            ).fetchone()
+            )
             if existing is None and int(count) >= MAX_SAVED_STRATEGIES:
                 raise StrategyError(
                     "strategy_limit_reached",
@@ -717,18 +724,19 @@ class StrategyStore:
                 )
             payload = json.dumps(compiled)
             if existing is None:
-                cursor = connection.execute(
-                    "INSERT INTO strategy_definitions (user_id, name, definition, created_at, updated_at) VALUES (?,?,?,?,?)",
+                cursor = connection.execute(connection.sql(
+                    "INSERT INTO strategy_definitions (user_id, name, definition, created_at, updated_at) VALUES (?,?,?,?,?) RETURNING id"),
                     (int(user_id), compiled["name"], payload, stamp, stamp),
                 )
-                if cursor.lastrowid is None:
+                inserted = cursor.fetchone()
+                if inserted is None:
                     raise RuntimeError("Saved strategy did not receive an id.")
-                strategy_id = int(cursor.lastrowid)
+                strategy_id = int(inserted["id"])
             else:
-                strategy_id = int(existing[0])
-                connection.execute(
-                    "UPDATE strategy_definitions SET definition = ?, updated_at = ? WHERE id = ?",
-                    (payload, stamp, strategy_id),
+                strategy_id = int(existing["id"])
+                connection.execute(connection.sql(
+                    "UPDATE strategy_definitions SET definition = ?, updated_at = ? WHERE id = ? AND user_id=?"),
+                    (payload, stamp, strategy_id, int(user_id)),
                 )
             connection.commit()
         finally:
@@ -739,25 +747,25 @@ class StrategyStore:
         self.ensure_schema()
         connection = self._connect()
         try:
-            rows = connection.execute(
-                "SELECT id, name, definition, created_at, updated_at FROM strategy_definitions WHERE user_id = ? ORDER BY updated_at DESC",
+            rows = connection.fetchall(connection.sql(
+                "SELECT id, name, definition, created_at, updated_at FROM strategy_definitions WHERE user_id = ? ORDER BY updated_at DESC"),
                 (int(user_id),),
-            ).fetchall()
+            )
         finally:
             connection.close()
         items = []
         for row in rows:
             try:
-                definition = json.loads(row[2])
+                definition = json.loads(row["definition"])
             except (TypeError, ValueError):
                 continue
             items.append(
                 {
-                    "id": int(row[0]),
-                    "name": row[1],
+                    "id": int(row["id"]),
+                    "name": row["name"],
                     "definition": definition,
-                    "created_at": row[3],
-                    "updated_at": row[4],
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
                 }
             )
         return items
@@ -766,32 +774,32 @@ class StrategyStore:
         self.ensure_schema()
         connection = self._connect()
         try:
-            row = connection.execute(
-                "SELECT id, name, definition, created_at, updated_at FROM strategy_definitions WHERE user_id = ? AND id = ?",
+            row = connection.fetchone(connection.sql(
+                "SELECT id, name, definition, created_at, updated_at FROM strategy_definitions WHERE user_id = ? AND id = ?"),
                 (int(user_id), int(strategy_id)),
-            ).fetchone()
+            )
         finally:
             connection.close()
         if row is None:
             raise StrategyError("strategy_not_found", "No saved strategy with that id.")
         return {
-            "id": int(row[0]),
-            "name": row[1],
-            "definition": json.loads(row[2]),
-            "created_at": row[3],
-            "updated_at": row[4],
+            "id": int(row["id"]),
+            "name": row["name"],
+            "definition": json.loads(row["definition"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
         }
 
     def delete(self, user_id: int, strategy_id: int) -> bool:
         self.ensure_schema()
         connection = self._connect()
         try:
-            cursor = connection.execute(
-                "DELETE FROM strategy_definitions WHERE user_id = ? AND id = ?",
+            cursor = connection.execute(connection.sql(
+                "DELETE FROM strategy_definitions WHERE user_id = ? AND id = ?"),
                 (int(user_id), int(strategy_id)),
             )
             connection.commit()
-            return cursor.rowcount > 0
+            return bool(cursor.rowcount > 0)
         finally:
             connection.close()
 

@@ -31,9 +31,14 @@ from __future__ import annotations
 import hashlib
 import secrets
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Sequence, Iterator
+from services.db.base import DatabaseInterface
+from services.db.factory import dao_session
+from services.db.sqlite_impl import SQLiteDatabase
+from services.db.configuration import postgres_selected
 
 try:  # pragma: no cover - layout dependent
     from database import get_connection as _default_get_connection
@@ -165,6 +170,20 @@ class AdminStepUpService:
         self._ensure_schema(connection)
         return connection
 
+    @contextmanager
+    def _database(self) -> Iterator[DatabaseInterface]:
+        if self._factory is not None or not postgres_selected():
+            db = SQLiteDatabase(self._connect())
+            try:
+                yield db
+            finally:
+                db.close()
+        else:
+            with dao_session() as factory:
+                factory.db.fetchall("SELECT token_hash FROM admin_step_up_tokens LIMIT 0")
+                factory.db.fetchall("SELECT actor_email FROM admin_step_up_failures LIMIT 0")
+                yield factory.db
+
     @staticmethod
     def _ensure_schema(connection: sqlite3.Connection) -> None:
         connection.executescript(
@@ -212,31 +231,33 @@ class AdminStepUpService:
         except Exception:  # pragma: no cover
             pass
 
-    def _password_hash_for(self, connection: sqlite3.Connection, email: str) -> tuple[int | None, str | None]:
-        try:
-            row = connection.execute(
-                "SELECT id, password_hash FROM users WHERE LOWER(email)=? LIMIT 1",
-                (email,),
-            ).fetchone()
-        except sqlite3.Error:
-            return None, None
+    def _password_hash_for(self, connection: DatabaseInterface, email: str) -> tuple[int | None, str | None]:
+        password_column = "password"
+        if isinstance(connection, SQLiteDatabase):
+            columns = {row["name"] for row in connection.fetchall("PRAGMA table_info(users)")}
+            if "password" not in columns and "password_hash" in columns:
+                password_column = "password_hash"  # Legacy injected fixtures, not the application schema.
+        query = ("SELECT id,password_hash AS stored_hash FROM users WHERE LOWER(email)=? LIMIT 1"
+                 if password_column == "password_hash" else
+                 "SELECT id,password AS stored_hash FROM users WHERE LOWER(email)=? LIMIT 1")
+        row = connection.fetchone(connection.sql(query), (email,))
         if row is None:
             return None, None
-        return (int(row[0]) if row[0] is not None else None), (str(row[1]) if row[1] else None)
+        return (int(row["id"]) if row["id"] is not None else None), (str(row["stored_hash"]) if row["stored_hash"] else None)
 
-    def _prune_locked(self, connection: sqlite3.Connection, now: datetime) -> None:
-        connection.execute("DELETE FROM admin_step_up_tokens WHERE expires_at <= ?", (_iso(now),))
-        connection.execute(
-            "DELETE FROM admin_step_up_failures WHERE occurred_at <= ?",
+    def _prune_locked(self, connection: DatabaseInterface, now: datetime) -> None:
+        connection.execute(connection.sql("DELETE FROM admin_step_up_tokens WHERE expires_at <= ?"), (_iso(now),))
+        connection.execute(connection.sql(
+            "DELETE FROM admin_step_up_failures WHERE occurred_at <= ?"),
             (_iso(now - timedelta(seconds=FAILED_ATTEMPT_WINDOW_SECONDS)),),
         )
 
-    def _recent_failures(self, connection: sqlite3.Connection, email: str, now: datetime) -> int:
-        row = connection.execute(
-            "SELECT COUNT(*) FROM admin_step_up_failures WHERE actor_email=? AND occurred_at > ?",
+    def _recent_failures(self, connection: DatabaseInterface, email: str, now: datetime) -> int:
+        row = connection.fetchone(connection.sql(
+            "SELECT COUNT(*) AS n FROM admin_step_up_failures WHERE actor_email=? AND occurred_at > ?"),
             (email, _iso(now - timedelta(seconds=FAILED_ATTEMPT_WINDOW_SECONDS))),
-        ).fetchone()
-        return int(row[0]) if row else 0
+        )
+        return int(row["n"]) if row else 0
 
     # -- public API --------------------------------------------------------
     def challenge(
@@ -261,8 +282,8 @@ class AdminStepUpService:
         lifetime = max(30, min(int(ttl_seconds), TOKEN_TTL_SECONDS))
 
         now = _utc_now()
-        connection = self._connect()
-        try:
+        with self._database() as connection:
+            connection.begin_write("admin-step-up:" + email)
             self._prune_locked(connection, now)
             if self._recent_failures(connection, email, now) >= MAX_FAILED_ATTEMPTS:
                 connection.commit()
@@ -286,8 +307,8 @@ class AdminStepUpService:
                 except Exception:
                     verified = False
             if not verified:
-                connection.execute(
-                    "INSERT INTO admin_step_up_failures(actor_email, action, occurred_at) VALUES(?,?,?)",
+                connection.execute(connection.sql(
+                    "INSERT INTO admin_step_up_failures(actor_email, action, occurred_at) VALUES(?,?,?)"),
                     (email, action_key, _iso(now)),
                 )
                 connection.commit()
@@ -303,15 +324,13 @@ class AdminStepUpService:
 
             token = secrets.token_urlsafe(32)
             expires_at = now + timedelta(seconds=lifetime)
-            connection.execute(
+            connection.execute(connection.sql(
                 """INSERT INTO admin_step_up_tokens(token_hash, actor_email, actor_user_id, action, target, created_at, expires_at)
-                   VALUES(?,?,?,?,?,?,?)""",
+                   VALUES(?,?,?,?,?,?,?)"""),
                 (_digest(token), email, actor_id or user_id, action_key, target_key, _iso(now), _iso(expires_at)),
             )
-            connection.execute("DELETE FROM admin_step_up_failures WHERE actor_email=?", (email,))
+            connection.execute(connection.sql("DELETE FROM admin_step_up_failures WHERE actor_email=?"), (email,))
             connection.commit()
-        finally:
-            connection.close()
 
         self._audit(
             actor_id=actor_id,
@@ -347,24 +366,25 @@ class AdminStepUpService:
             raise StepUpError("This action requires password confirmation.")
 
         now = _utc_now()
-        connection = self._connect()
-        try:
+        with self._database() as connection:
+            connection.begin_write("admin-step-up-token:" + _digest(token))
             self._prune_locked(connection, now)
-            row = connection.execute(
+            row = connection.fetchone(connection.sql(
                 """SELECT actor_email, action, target, created_at, expires_at
-                   FROM admin_step_up_tokens WHERE token_hash=?""",
+                   FROM admin_step_up_tokens WHERE token_hash=?"""),
                 (_digest(token),),
-            ).fetchone()
+            )
             if row is None:
                 connection.commit()
                 raise StepUpError("That confirmation has expired or was already used. Confirm again to continue.")
-            stored_email, stored_action, stored_target, created_at, expires_at = row
+            stored_email, stored_action, stored_target, created_at, expires_at = (row[key] for key in ("actor_email", "action", "target", "created_at", "expires_at"))
             # Burn the token before validating the binding: a mismatched attempt
             # must not be retryable with the same token.
-            connection.execute("DELETE FROM admin_step_up_tokens WHERE token_hash=?", (_digest(token),))
+            deleted = connection.execute(connection.sql("DELETE FROM admin_step_up_tokens WHERE token_hash=?"), (_digest(token),))
+            if deleted.rowcount != 1:
+                connection.rollback()
+                raise StepUpError("That confirmation has expired or was already used. Confirm again to continue.")
             connection.commit()
-        finally:
-            connection.close()
 
         expiry = _parse_iso(expires_at)
         if expiry is None or expiry <= now:

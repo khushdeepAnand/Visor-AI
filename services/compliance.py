@@ -3,7 +3,7 @@
 import json
 from typing import Any
 
-from database import get_connection
+from services.db.factory import dao_session
 from services.admin_registry import _ensure_settings_table
 
 RESEARCH_ACKNOWLEDGMENT_VERSION = "2026-09-27"
@@ -24,14 +24,12 @@ REVIEW_ITEMS = {
 
 
 def review_checklist() -> list[dict[str, Any]]:
-    conn = get_connection()
-    try:
+    with dao_session() as factory:
+        conn = factory.db
         _ensure_settings_table(conn)
-        rows = dict(conn.execute("SELECT key,value FROM app_settings WHERE key LIKE 'regulatory.review.%'").fetchall())
+        rows = {row["key"]: row["value"] for row in conn.fetchall(conn.sql("SELECT key,value FROM app_settings WHERE key LIKE 'regulatory.review.%'"))}
         return [{"id": key, "label": label, **json.loads(rows.get(f"regulatory.review.{key}", '{"status":"open","note":""}'))}
                 for key, label in REVIEW_ITEMS.items()]
-    finally:
-        conn.close()
 
 
 def update_review_item(item_id: str, *, status: str, note: str, actor_id: int, actor_email: str) -> None:
@@ -41,46 +39,37 @@ def update_review_item(item_id: str, *, status: str, note: str, actor_id: int, a
     note = note.strip()
     if not 12 <= len(note) <= 500:
         raise ValueError("Provide a review justification or evidence reference (12–500 characters)")
-    conn = get_connection()
-    try:
+    with dao_session() as factory:
+        conn = factory.db
         _ensure_settings_table(conn)
-        conn.execute("BEGIN IMMEDIATE")
-        conn.execute("""INSERT INTO app_settings(key,value,updated_by) VALUES(?,?,?)
-            ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP,updated_by=excluded.updated_by""",
+        conn.begin_write("compliance-review:" + item_id)
+        conn.execute(conn.sql("""INSERT INTO app_settings(key,value,updated_by) VALUES(?,?,?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP,updated_by=excluded.updated_by"""),
             (f"regulatory.review.{item_id}", json.dumps({"status": status, "note": note}), actor_email))
-        conn.execute("""INSERT INTO admin_audit_log(actor_user_id,actor_email,action,target,outcome,detail)
-            VALUES(?,?,'compliance_review_update',?,'ok',?)""", (actor_id, actor_email, item_id, json.dumps({"status": status, "reason": note})))
+        conn.execute(conn.sql("""INSERT INTO admin_audit_log(actor_user_id,actor_email,action,target,outcome,detail)
+            VALUES(?,?,'compliance_review_update',?,'ok',?)"""), (actor_id, actor_email, item_id, json.dumps({"status": status, "reason": note})))
         conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
 
 
 def acknowledgment_directory(limit: int = 100) -> list[dict[str, Any]]:
-    conn = get_connection()
-    try:
-        rows = conn.execute("""SELECT u.id,u.email,MAX(a.created_at) FROM users u LEFT JOIN audit_log a
+    with dao_session() as factory:
+        conn = factory.db
+        rows = conn.fetchall(conn.sql("""SELECT u.id,u.email,MAX(a.created_at) AS acknowledged_at FROM users u LEFT JOIN audit_log a
             ON a.user_id=u.id AND a.action='research_disclaimer_acknowledged' AND a.entity_id=?
-            GROUP BY u.id,u.email ORDER BY u.id DESC LIMIT ?""", (RESEARCH_ACKNOWLEDGMENT_VERSION, limit)).fetchall()
-        return [{"user_id": row[0], "email": row[1], "acknowledged_at": row[2], "required": row[2] is None} for row in rows]
-    finally:
-        conn.close()
+            GROUP BY u.id,u.email ORDER BY u.id DESC LIMIT ?"""), (RESEARCH_ACKNOWLEDGMENT_VERSION, limit))
+        return [{"user_id": row["id"], "email": row["email"], "acknowledged_at": row["acknowledged_at"], "required": row["acknowledged_at"] is None} for row in rows]
 
 
 def research_acknowledgment_required(user_id: int) -> bool:
     """Return whether the user has accepted the current disclosure version."""
-    connection = get_connection()
-    try:
-        row = connection.execute(
+    with dao_session() as factory:
+        connection = factory.db
+        row = connection.fetchone(connection.sql(
             """
             SELECT 1 FROM audit_log
             WHERE user_id=? AND action='research_disclaimer_acknowledged' AND entity_id=?
             LIMIT 1
-            """,
+            """),
             (int(user_id), RESEARCH_ACKNOWLEDGMENT_VERSION),
-        ).fetchone()
+        )
         return row is None
-    finally:
-        connection.close()
