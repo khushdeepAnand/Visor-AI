@@ -13,6 +13,21 @@ class DatabaseInterface(abc.ABC):
     def get_connection(self) -> Any:
         """Return a database connection."""
         pass
+
+    @abc.abstractmethod
+    def sql(self, query: str) -> str:
+        """Bind-marker compilation for portable SQL, not SQL dialect translation.
+
+        Callers explicitly own dialect-specific DDL, upserts and locking. This
+        method compiles positional question-mark parameters only; values remain
+        separate DB-API parameters. Never use it on a native %s statement.
+        """
+        pass
+
+    @abc.abstractmethod
+    def begin_write(self, lock_key: Optional[str] = None) -> None:
+        """Begin a serialized read-modify-write operation on this connection."""
+        pass
     
     @abc.abstractmethod
     def execute(self, query: str, params: tuple[Any, ...] = ()) -> Any:

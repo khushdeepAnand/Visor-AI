@@ -13,7 +13,7 @@ import sys
 import tempfile
 import base64
 import sqlite3
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +28,12 @@ APPLICATION_TABLES = frozenset("""users admin_audit_log oauth_identities auth_se
     audit_log sentiment_snapshots webauthn_credentials login_devices login_anomalies app_settings
     admin_step_up_tokens admin_step_up_failures forecast_kill_switches feature_flag_state status_banners
     saved_chart_layouts screener_saved_screens strategy_definitions forward_tests forward_test_events""".split())
+
+TIMESTAMP_COLUMNS = frozenset("""created_at updated_at last_login_at issued_at expires_at revoked_at consumed_at used_at
+    origin_timestamp target_timestamp data_timestamp feature_timestamp settlement_data_timestamp settled_at evaluated_at
+    filled_at cancelled_at earned_at added_date buy_date prediction_date transaction_date last_triggered_at last_email_at
+    snapshot_at first_seen last_seen confirmed_at acknowledged_at occurred_at starts_at ends_at published_at withdrawn_at
+    auto_rolled_back_at started_at stopped_at last_evaluated_at bar_at recorded_at""".split())
 
 
 def _identifier(name: str) -> str:
@@ -61,19 +67,35 @@ def _value(value: Any, column: Any) -> Any:
     import sqlalchemy as sa
     if value is None:
         return None
+    if column.name in TIMESTAMP_COLUMNS:
+        # Text timestamps are deliberately preserved (forecast hashes depend on
+        # their original representation), but malformed values are not imported.
+        try:
+            datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError("Invalid timestamp value in migration source") from None
+    if column.name == "date_of_birth" and value != "":
+        date.fromisoformat(str(value))
     if isinstance(column.type, sa.DateTime):
         parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         parsed = parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
         return parsed if column.type.timezone else parsed.replace(tzinfo=None)
     if isinstance(column.type, sa.JSON):
-        return json.loads(value) if isinstance(value, str) else value
+        if isinstance(value, str):
+            return json.loads(value, parse_constant=_reject_json_constant)
+        json.dumps(value, allow_nan=False)
+        return value
     if column.name.endswith("_json") or (column.table.name, column.name) in {
         ("webauthn_credentials", "transports"), ("strategy_definitions", "definition"),
         ("screener_saved_screens", "filters"), ("screener_saved_screens", "symbols"),
         ("forward_tests", "symbols"),
     }:
-        json.loads(value) if isinstance(value, str) else json.dumps(value, allow_nan=False)
+        json.loads(value, parse_constant=_reject_json_constant) if isinstance(value, str) else json.dumps(value, allow_nan=False)
     return value
+
+
+def _reject_json_constant(value: str) -> Any:
+    raise ValueError("Non-finite JSON constants are not accepted")
 
 
 def _digest(rows: list[dict[str, Any]]) -> str:

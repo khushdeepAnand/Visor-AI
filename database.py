@@ -3,6 +3,7 @@ import json
 import math
 import os
 import sqlite3
+import psycopg2
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast, Optional
 
@@ -21,9 +22,9 @@ except ImportError:
     SQLCIPHER_AVAILABLE = False
 
 # Both drivers expose DB-API exceptions, but their class hierarchies are distinct.
-DATABASE_ERRORS = (sqlite3.Error,) + ((sqlcipher.Error,) if sqlcipher else ())
-INTEGRITY_ERRORS = (sqlite3.IntegrityError,) + ((sqlcipher.IntegrityError,) if sqlcipher else ())
-OPERATIONAL_ERRORS = (sqlite3.OperationalError,) + ((sqlcipher.OperationalError,) if sqlcipher else ())
+DATABASE_ERRORS = (sqlite3.Error, psycopg2.Error) + ((sqlcipher.Error,) if sqlcipher else ())
+INTEGRITY_ERRORS = (sqlite3.IntegrityError, psycopg2.IntegrityError) + ((sqlcipher.IntegrityError,) if sqlcipher else ())
+OPERATIONAL_ERRORS = (sqlite3.OperationalError, psycopg2.OperationalError) + ((sqlcipher.OperationalError,) if sqlcipher else ())
 
 
 def database_row(cursor, values):
@@ -84,7 +85,7 @@ def _open_connection(database_path=None):
     """Open a database connection with optional SQLCipher encryption."""
     from services.db.configuration import postgres_selected
     path = os.path.abspath(os.fspath(database_path) if database_path is not None else DATABASE)
-    if postgres_selected() and path == os.path.abspath(DATABASE):
+    if path == os.path.abspath(DATABASE) and postgres_selected():
         raise RuntimeError(
             "PostgreSQL application routing is not complete. Refusing to write the application SQLite database "
             "while PostgreSQL is selected; keep DB_BACKEND=sqlite until end-to-end adoption is verified."
@@ -1016,13 +1017,13 @@ def buy_stock(
             "Stock symbol is required."
         )
 
-    if shares <= 0:
+    if not math.isfinite(shares) or shares <= 0:
 
         raise ValueError(
             "Number of shares must be greater than zero."
         )
 
-    if buy_price < 0:
+    if not math.isfinite(buy_price) or buy_price < 0:
 
         raise ValueError(
             "Buy price cannot be negative."
@@ -1212,13 +1213,13 @@ def update_stock(
     shares = float(shares)
     buy_price = float(buy_price)
 
-    if shares <= 0:
+    if not math.isfinite(shares) or shares <= 0:
 
         raise ValueError(
             "Number of shares must be greater than zero."
         )
 
-    if buy_price < 0:
+    if not math.isfinite(buy_price) or buy_price < 0:
 
         raise ValueError(
             "Buy price cannot be negative."
@@ -1280,9 +1281,9 @@ def sell_stock(
 
     shares = float(shares)
     sell_price = float(sell_price)
-    if shares <= 0:
+    if not math.isfinite(shares) or shares <= 0:
         raise ValueError("Number of shares sold must be greater than zero.")
-    if sell_price < 0:
+    if not math.isfinite(sell_price) or sell_price < 0:
         raise ValueError("Sale price cannot be negative.")
 
     if postgres_selected():

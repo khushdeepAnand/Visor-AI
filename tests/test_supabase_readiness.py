@@ -78,6 +78,21 @@ def test_explicit_postgres_uses_pooled_url_only(monkeypatch, selector):
     assert factory.get_dao_factory() == ("postgresql://unused.invalid/pooled", 10)
 
 
+def test_invalid_backend_never_silently_selects_sqlite(monkeypatch):
+    monkeypatch.setenv("DB_BACKEND", "postgreql")
+    with pytest.raises(ValueError, match="backend must be sqlite or postgresql"):
+        factory.get_dao_factory()
+
+
+def test_selector_whitespace_and_case_are_normalized(monkeypatch):
+    from services.db.configuration import postgres_selected
+    monkeypatch.setenv("DB_BACKEND", " PostgreSQL ")
+    assert postgres_selected()
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused.invalid/pooled")
+    monkeypatch.setattr(factory, "PostgresDAOFactory", lambda dsn, size: (dsn, size))
+    assert factory.get_dao_factory() == ("postgresql://unused.invalid/pooled", 10)
+
+
 @pytest.mark.parametrize("variable", ["DATABASE_URL", "DATABASE_MIGRATION_URL", "STOCKPILOT_DATABASE_URL"])
 def test_single_postgres_url_falls_back_for_app_and_migrations(monkeypatch, variable):
     from services.db.configuration import postgres_url

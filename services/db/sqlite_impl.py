@@ -32,6 +32,13 @@ class SQLiteDatabase(DatabaseInterface):
     
     def get_connection(self) -> sqlite3.Connection:
         return self._conn
+
+    def sql(self, query: str) -> str:
+        return query
+
+    def begin_write(self, lock_key: Optional[str] = None) -> None:
+        if not self._conn.in_transaction:
+            self._conn.execute("BEGIN IMMEDIATE")
     
     def execute(self, query: str, params: tuple[Any, ...] = ()) -> sqlite3.Cursor:
         return self._conn.execute(query, params)

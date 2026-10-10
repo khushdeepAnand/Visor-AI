@@ -5,6 +5,7 @@ from .update_fields import USER_FIELDS, SETTINGS_FIELDS, validate_fields
 import json
 import math
 import threading
+import re
 from datetime import datetime, timezone
 from typing import Any, Optional, Sequence
 
@@ -30,7 +31,12 @@ class PostgresDatabase(DatabaseInterface):
     """PostgreSQL database connection wrapper with connection pooling."""
     
     def __init__(self, dsn: str, pool_size: int = 10):
-        self._pool = ThreadedConnectionPool(1, pool_size, dsn)
+        try:
+            self._pool = ThreadedConnectionPool(1, pool_size, dsn)
+        except psycopg2.Error:
+            # URI parse/auth failures can contain private DSN fragments. Keep
+            # the failure observable without allowing vendor text into logs.
+            raise RuntimeError("PostgreSQL connection failed; check backend credentials and endpoint.") from None
         self._local = threading.local()
     
     def _get_conn(self) -> psycopg2.extensions.connection:
@@ -48,12 +54,34 @@ class PostgresDatabase(DatabaseInterface):
     
     def get_connection(self) -> psycopg2.extensions.connection:
         return self._get_conn()
+
+    def sql(self, query: str) -> str:
+        # Keep quoted literals/identifiers and SQL comments intact. Percent
+        # escaping is for psycopg2's DB-API parameter parser, not SQL values.
+        escaped = query.replace("%", "%%")
+        return re.sub(r"('(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|--[^\n]*|/\*.*?\*/)|\?",
+                      lambda match: match.group(1) if match.group(1) is not None else "%s",
+                      escaped, flags=re.DOTALL)
+
+    def begin_write(self, lock_key: Optional[str] = None) -> None:
+        self._get_conn()
+        if lock_key is not None:
+            # Transaction-scoped, stable across processes. Domain callers use
+            # the same namespace/key for every writer of the protected subject.
+            cursor = self.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (lock_key,))
+            cursor.close()
     
     def execute(self, query: str, params: tuple[Any, ...] = ()) -> RealDictCursor:
         conn = self._get_conn()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         try:
             cursor.execute(query, params)
+        except psycopg2.Error as exc:
+            cursor.close()
+            self.rollback()
+            # Preserve exception classes for integrity/serialization handling,
+            # but suppress vendor DETAIL/CONTEXT that can include entire rows.
+            raise type(exc)("PostgreSQL database operation failed.") from None
         except Exception:
             cursor.close()
             self.rollback()

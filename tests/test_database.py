@@ -3,6 +3,7 @@
 # ==========================================================
 
 import database
+import pytest
 
 
 def create_user():
@@ -88,3 +89,22 @@ def test_save_prediction_once_prevents_same_day_duplicates(temp_db):
     assert first is True
     assert second is False
     assert len(database.get_prediction_history(user_id)) == 1
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_nonfinite_financial_values_never_change_holdings_or_ledger(temp_db, value):
+    uid = create_user()
+    database.buy_stock(uid, "TCS", "TCS", 2, 100)
+    holding = database.get_portfolio(uid)[0][0]
+    for operation in (
+        lambda: database.buy_stock(uid, "TCS", "TCS", value, 100),
+        lambda: database.buy_stock(uid, "TCS", "TCS", 1, value),
+        lambda: database.update_stock(holding, uid, value, 100),
+        lambda: database.update_stock(holding, uid, 2, value),
+        lambda: database.sell_stock(holding, uid, value, 100),
+        lambda: database.sell_stock(holding, uid, 1, value),
+    ):
+        with pytest.raises(ValueError):
+            operation()
+    assert database.get_portfolio(uid)[0][3:5] == (2., 100.)
+    assert len(database.get_transactions(uid)) == 1

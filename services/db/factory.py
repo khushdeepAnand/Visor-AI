@@ -9,7 +9,7 @@ from typing import Any, Optional, Iterator
 from .base import DAOFactory
 from .sqlite_impl import SQLiteDAOFactory
 from .postgres_impl import PostgresDAOFactory
-from .configuration import postgres_url
+from .configuration import postgres_url, backend_name
 
 _pools: dict[tuple[str, int], PostgresDAOFactory] = {}
 _pool_lock = threading.Lock()
@@ -70,7 +70,7 @@ def get_dao_factory(config: Optional[dict[str, Any]] = None) -> DAOFactory:
         config = {}
     
     # Read from environment if not in config
-    db_type = str(config.get("database_type") or os.getenv("DB_BACKEND") or os.getenv("STOCKPILOT_DB_TYPE", "sqlite"))
+    db_type = backend_name(str(config["database_type"]) if config.get("database_type") else None)
     dsn = config.get("database_url") or os.getenv("STOCKPILOT_DATABASE_URL")
     pool_size = config.get("pool_size") or int(os.getenv("STOCKPILOT_DB_POOL_SIZE", "10"))
     postgres = db_type.lower() in {"postgres", "postgresql"}

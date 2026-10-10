@@ -11,6 +11,12 @@ SQLite file rather than silently falling back. There has been no production
 data transfer or traffic cutover. Keep application startup on SQLite pending
 remaining auth/trading/job adoption and both-backend release verification.
 
+Continued auth persistence now passes real PostgreSQL password/OIDC, JWT/session,
+TOTP/recovery/device-bound challenge and P-256 WebAuthn verification. The latest
+focused local auth/security/IDOR/database/device suite passed **123 tests**; mypy
+passed **198 files**. The detailed report distinguishes these service/crypto
+proofs from still-pending PostgreSQL application startup and browser acceptance.
+
 ## v20 → v21 continuation — 2026-10-09
 
 The requested Windows archive name remains v18. This continuation is **partial**;

@@ -5,8 +5,15 @@ import os
 from urllib.parse import urlsplit
 
 
+def backend_name(configured: str | None = None) -> str:
+    name = (configured or os.getenv("DB_BACKEND") or os.getenv("STOCKPILOT_DB_TYPE") or "sqlite").strip().lower()
+    if name not in {"sqlite", "postgres", "postgresql"}:
+        raise ValueError("Database backend must be sqlite or postgresql")
+    return "postgresql" if name in {"postgres", "postgresql"} else "sqlite"
+
+
 def postgres_selected() -> bool:
-    return (os.getenv("DB_BACKEND") or os.getenv("STOCKPILOT_DB_TYPE") or "sqlite").lower() in {"postgres", "postgresql"}
+    return backend_name() == "postgresql"
 
 
 def postgres_url(*, migration: bool = False) -> str | None:

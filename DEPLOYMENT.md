@@ -11,7 +11,9 @@ production-ready Supabase release.** Keep `DB_BACKEND=sqlite` for the applicatio
   `STOCKPILOT_DATABASE_URL`, is present. Explicit selectors alone choose a backend.
 - Legacy portfolio/watchlist/transaction reads and writes, prediction save/read,
   range snapshot save/read and audit helpers have begun shared-DAO adoption.
-  Other auth/admin/trading/settlement/retention paths are still outstanding.
+  Password/OIDC, JWT sessions, MFA, passkeys and login devices now have live
+  PostgreSQL persistence/crypto checks. Admin/trading/settlement/retention and
+  other application paths are still outstanding; see the detailed status report.
 - Selecting PostgreSQL refuses access to the main application SQLite file.
   This prevents a misleading cloud selection from silently writing locally.
   Explicit local sidecars remain supported. Startup is intentionally blocked

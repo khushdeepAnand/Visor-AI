@@ -6,6 +6,56 @@ complete. SQLite stays the permanent default/local store. One selected writable
 application backend, custom JWT/MFA/WebAuthn/session/CSRF auth, and no dual-write
 remain the target contract.
 
+## Continued auth-persistence stage (supersedes auth-pending rows below)
+
+`authentication.py`, `services/auth_api.py`, `services/webauthn.py` and
+`services/login_anomaly.py` now use the existing selected database abstraction
+for production persistence. SQLite remains the default; its local schema/test
+connection seams remain. PostgreSQL schema belongs to Alembic, not runtime
+SQLite DDL. Custom JWT claims, password hashes, MFA encryption/recovery hashes,
+WebAuthn SDK verification and session/CSRF authority remain the existing system.
+
+- The shared database interface compiles positional bind markers for portable
+  statements and exposes serialized writes. It does not translate SQLite DDL,
+  JSON operators or other dialect-specific SQL. Values remain bound; literals,
+  identifiers and comments are preserved by PostgreSQL marker compilation.
+- Registration/settings are atomic; account login/OIDC writes and reset-token
+  consumption have deliberate transaction-scoped locks. Concurrent duplicate
+  registration and reset replay were exercised on real PostgreSQL.
+- Session ownership/version revocation, encrypted TOTP enrollment, recovery
+  replacement/consumption, challenge attempt caps/single use and confirmed-device
+  persistence are adopted. Session issuance no longer succeeds if the authoritative
+  account cannot be loaded.
+- Passkey writes are owner/key-bound; counters cannot be downgraded on re-enrollment.
+  Assertion verification/counter updates are serialized. The existing in-process
+  WebAuthn challenge cache has atomic consume/prune operations; cross-process
+  challenge distribution remains unverified and is not added as a second system.
+- The live parity tool now creates actual P-256 credentials, performs WebAuthn
+  SDK registration/assertion verification, rejects bad signatures/replays/counters
+  and cross-user credential writes, and tests device-bound MFA confirmation.
+  These are real crypto/database checks, not a claimed PostgreSQL browser run.
+- PostgreSQL connection failures remain observable, and query exception classes
+  are retained while suppressing private DSN fragments and vendor row DETAIL/CONTEXT from
+  standard tracebacks. Marker-leak assertions ran against real failing operations.
+- Unknown backend selectors now fail rather than silently selecting SQLite;
+  whitespace/case are normalized. Existing URL-alone/default-selection tests remain.
+- Migration validation covers text timestamps and birth dates as well as native
+  timestamp columns, and rejects non-finite JSON constants. Invalid-source attempts
+  were followed by exact destination reconciliation. Financial helper writes reject
+  NaN/infinite quantities/prices before altering holdings or ledger rows.
+
+Latest executed checks: the expanded `verify_backend_parity.py --live` passed;
+focused authentication/SQLCipher/OAuth/security/IDOR/database/selector/device/travel
+modules **123 passed**; mypy **198 source files passed** using the same configuration
+with a temporary cache directory to avoid slow OneDrive cache I/O. Earlier focused
+auth runs also passed (63, 85 and 47 tests as their scope expanded). Reference and
+security gates are rerun before this stage is pushed.
+
+Application-wide PostgreSQL startup, admin/support controls, trading engine,
+saved-content services, settlement/retention/scheduler jobs, complete backend and
+browser suites, actual Supabase role/network checks and final ZIP publication are
+still pending. No production transfer/cutover was approved or performed.
+
 ## A. Inspection and architectural findings
 
 The existing DAO factory was not the runtime application's database boundary.
