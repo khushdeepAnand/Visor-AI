@@ -99,7 +99,8 @@ Quiesce all API/worker/scheduler writers before an approved transfer. Independen
 back up the PostgreSQL target with the operator's `pg_dump -Fc` procedure and
 restore it to a separate database before granting a go decision. Supabase
 dashboard backup/PITR capabilities depend on the project's plan and must be
-verified. The real source was only inventoried; no approved transfer/cutover ran.
+verified. The real source was inventoried and an encrypted local backup/restore
+rehearsal passed; no approved transfer to PostgreSQL or traffic cutover ran.
 
 Recovery is a verified backup restored to a new path/database, then explicit
 configuration selection. After any cloud-only writes, switching to the old

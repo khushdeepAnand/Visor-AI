@@ -159,7 +159,17 @@ dependencies made explicit. No SQLite-only/static test is claimed as Supabase
 correctness. Whole-working-tree secret scanning timed out because generated/
 runtime artifacts are also scanned; the complete allowlisted source and sanitized
 candidate archive scans did pass. Full backend, browser, both-backend extracted
-application smoke, final ZIP publication and Git push remain to be reported.
+application smoke and final ZIP publication remain incomplete.
+
+## Checkpoint publication
+
+Implementation checkpoint `826f222` was committed and successfully pushed to
+`origin/feature/v18-comprehensive-updates` in `khushdeepAnand/Visor-AI`, including
+the reviewed existing changes the owner authorized. This is a staged integration
+checkpoint, not completion of the full request. The final supplied
+`StockPilot-AI-v18-WINDOWS.zip` is held pending the remaining PostgreSQL runtime
+and release gates; the temporary sanitized candidate passed SQLite extraction
+checks. Subsequent documentation commits record these observed delivery facts.
 
 ## G/H. Windows continuation and release blockers
 
