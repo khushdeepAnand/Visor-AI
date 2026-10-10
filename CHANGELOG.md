@@ -243,6 +243,7 @@
 - publish verified StockPilot v18 foundation
 
 ### Fixes
+- sectors page optional chaining for empty API response
 - resolve CI mutation gate failures and update release build
 - survive rate-limit 429s in parallel browser runs
 - E2E infinite retry on 429 for /api/v1/system - remove max retry limit to handle CI rate limits
